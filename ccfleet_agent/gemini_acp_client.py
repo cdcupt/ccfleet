@@ -17,13 +17,88 @@ import time
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-VERSION = "0.2.18"
+VERSION = "0.2.20"
+# ACP reserves -32000 for sessions which require authentication.
+AUTH_REQUIRED = -32000
+INTERNAL_ERROR = -32603
 MAX_RECORD = 4 * 1024 * 1024
 SLOT_BUSY = "Another Gemini editor is using this slot. Close it and reconnect."
 BUSY_RETRY_WINDOW = 10.0
 BUSY_RETRY_DELAY = 0.4
 ALLOW = {"optionId": "allow", "kind": "allow_once", "name": "Allow once"}
 DECLINE = {"optionId": "decline", "kind": "reject_once", "name": "Decline"}
+
+
+# These strings are part of the paired slot protocol, including older slot releases.
+# Unrecognized text may contain host paths, credentials or vendor diagnostics.
+OPEN_TIMEOUT = "Gemini startup timed out. Check that the private Mac slot is online."
+OPEN_TRANSPORT = ("The connection to the private Mac closed before Gemini was ready. "
+                  "Check the slot and this Mac’s pairing on ccfleet.io/account/gemini.")
+OPEN_REFUSED = "The private slot could not open Gemini. Check Antigravity on the slot Mac."
+BAD_READY = "The slot returned an invalid Gemini startup reply. Check its CCFleet service version."
+SLOT_SESSION_TIMEOUT = "The Gemini editor session timed out. Reopen it to continue."
+SLOT_LOGIN_REQUIRED = {
+    "Open CCFleet Gemini Sign In in the private Mac owner's Applications folder, then reconnect.",
+    "Sign in to the Antigravity editor",
+}
+OPEN_SLOT_ERRORS = {
+    "The Gemini editor is unavailable on the private Mac. Reopen it to try again.":
+        "The private Mac could not start its Gemini editor. Check the slot service.",
+    "The Gemini slot timed out. Reopen the editor to continue.": OPEN_TIMEOUT,
+    SLOT_SESSION_TIMEOUT: OPEN_TIMEOUT,
+    "The Google editor agent stopped on the slot.":
+        "Antigravity stopped during startup on the private Mac. Check the slot service.",
+    "The Google editor could not complete this request.": OPEN_REFUSED,
+    "The signed-in Google account has no available Gemini editor model.":
+        "Antigravity on the private Mac offered no Gemini models. Check the account on the slot.",
+    "The Google editor declined the model change.":
+        "Antigravity on the private Mac declined the starting Gemini model.",
+    "The installed Google editor agent is incompatible. Update CCFleet on the slot.":
+        "The slot’s Antigravity agent is incompatible with CCFleet. Update the slot service.",
+    "Update your CCFleet client to open the Gemini editor.":
+        "The slot requires a newer CCFleet client. Run ccfleet update on this Mac.",
+    "invalid Gemini editor frame size": BAD_READY,
+    "invalid Gemini editor message": BAD_READY,
+}
+
+
+BROKER_START_ERRORS = {
+    b"ccfleet: broker refused the WebSocket connection (HTTP 401)\n":
+        (AUTH_REQUIRED, "CCFleet did not accept this Mac’s Gemini pairing (HTTP 401). "
+         "Run ccfleet pair gemini --replace with your current setup code."),
+    b"ccfleet: broker refused the WebSocket connection (HTTP 403)\n":
+        (INTERNAL_ERROR, "CCFleet refused slot access (HTTP 403). "
+         "Check your slot on ccfleet.io/account."),
+    b"ccfleet: broker refused the WebSocket connection (HTTP 502)\n":
+        (INTERNAL_ERROR, "CCFleet could not reach the private Mac (HTTP 502). "
+         "Check the slot connection."),
+    b"ccfleet: broker refused the WebSocket connection (HTTP 503)\n":
+        (INTERNAL_ERROR, "The private slot connection is unavailable (HTTP 503). "
+         "Check the slot connection."),
+    b"ccfleet: broker refused the WebSocket connection (HTTP 504)\n":
+        (INTERNAL_ERROR, "The private slot connection timed out (HTTP 504). "
+         "Check the slot connection."),
+}
+
+
+def collect_broker_status(stream, status):
+    """Drain SSH stderr; hand off only complete, fixed local proxy status lines."""
+    message = None
+    try:
+        with stream:
+            continuation = False
+            for chunk in iter(lambda: stream.readline(1024), b""):
+                if not continuation and message is None:
+                    message = BROKER_START_ERRORS.get(chunk)
+                    if message is not None:
+                        status.put_nowait(message)
+                continuation = not chunk.endswith(b"\n")
+                del chunk
+    except OSError:
+        pass
+    finally:
+        if message is None:
+            status.put_nowait(None)
 
 
 class RpcError(Exception):
@@ -113,13 +188,31 @@ class Session:
         with self.lock:
             if self.cancelled.is_set():
                 raise EOFError
-            self.process = subprocess.Popen(
-                self.host.command, cwd="/", env=self.host.environment, stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True,
-            )
+            try:
+                self.process = subprocess.Popen(
+                    self.host.command, cwd="/", env=self.host.environment, stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+                )
+            except OSError:
+                raise RpcError(INTERNAL_ERROR,
+                               "CCFleet could not start the local SSH transport.") from None
+            status = queue.Queue(maxsize=1)
+            threading.Thread(target=collect_broker_status, args=(self.process.stderr, status),
+                             daemon=True).start()
             self.channel = self.host.editor.Channel(self.process)
-        self.channel.send({"type": "open", "version": 1})
-        return self.channel.receive(timeout=420)
+        try:
+            self.channel.send({"type": "open", "version": 1})
+            return self.channel.receive(timeout=420)
+        except (TimeoutError, subprocess.TimeoutExpired):
+            raise RpcError(INTERNAL_ERROR, OPEN_TIMEOUT) from None
+        except (EOFError, OSError):
+            # SSH and its proxy have separate output streams. Give the collector time to
+            # see a diagnostic already in flight, without waiting for SSH to terminate.
+            try:
+                reason = status.get(timeout=0.25)
+            except queue.Empty:
+                reason = None
+            raise RpcError(*(reason or (INTERNAL_ERROR, OPEN_TRANSPORT))) from None
 
     def open(self):
         if self.host.test_folder:
@@ -136,31 +229,31 @@ class Session:
                 break
             except ValueError as exc:
                 reason = str(exc)
-                if ("CCFleet Gemini Sign In" in reason
-                        or reason.startswith("Sign in to the Antigravity")):
-                    raise RpcError(-32000, "Open CCFleet Gemini Sign In on your private Mac, "
-                                   "then start a new thread.") from None
+                if reason in SLOT_LOGIN_REQUIRED:
+                    raise RpcError(AUTH_REQUIRED, "Open CCFleet Gemini Sign In on your private "
+                                   "Mac, then start a new thread.") from None
                 if reason != SLOT_BUSY:
-                    raise
+                    message = OPEN_SLOT_ERRORS.get(reason, OPEN_REFUSED)
+                    raise RpcError(INTERNAL_ERROR, message) from None
             self._retire_channel(graceful=False)
             now = time.monotonic()
             if deadline is None:
                 deadline = now + BUSY_RETRY_WINDOW
             if now + delay > deadline:
-                raise RpcError(-32000, "Another Gemini session is using your slot. "
+                raise RpcError(INTERNAL_ERROR, "Another Gemini session is using your slot. "
                                "Close it before opening a new T3 Gemini thread.")
             if self.cancelled.wait(delay):
                 raise EOFError
             delay = min(1.5, delay * 2)
         self.current = ready.get("model")
         if ready.get("type") != "ready" or not isinstance(self.current, str):
-            raise ValueError("Invalid Gemini session.")
+            raise RpcError(INTERNAL_ERROR, BAD_READY)
         models = ready.get("models", [self.current])
         if (not isinstance(models, list) or not 1 <= len(models) <= 256
                 or any(not isinstance(m, str) or not self.host.editor.MODEL_ID.fullmatch(m)
                        for m in models) or self.current not in models
                 or len(set(models)) != len(models)):
-            raise ValueError("Invalid model catalog.")
+            raise RpcError(INTERNAL_ERROR, BAD_READY)
         self.models = models
         return {"sessionId": self.id, "configOptions": self.config(), "models": {
             "currentModelId": self.current, "availableModels": [
@@ -212,6 +305,19 @@ class Session:
         self._retire_channel(graceful=True)
         self.workspace.close()
 
+    def send_request(self, message):
+        try:
+            self.channel.send(message)
+        except BrokenPipeError:
+            # A timed-out slot can send its final frame and close before our next
+            # write. Inspect only that frame. Never retry a prompt or a model change.
+            try:
+                self.channel.receive(timeout=0.25)
+            except (OSError, EOFError, ValueError) as exc:
+                if isinstance(exc, ValueError) and str(exc) == SLOT_SESSION_TIMEOUT:
+                    raise
+            raise
+
     def update(self, event, **fields):
         self.host.write({"method": "session/update", "params": {
             "sessionId": self.id, "update": {"sessionUpdate": event, **fields},
@@ -232,14 +338,14 @@ class Session:
         if model not in self.models:
             raise invalid("Choose a Gemini model offered by this slot.")
         if model != self.current:
-            self.channel.send({"type": "set_model", "model": model})
+            self.send_request({"type": "set_model", "model": model})
             reply = self.channel.receive()
             if reply.get("type") != "model" or reply.get("model") not in self.models:
                 raise ValueError("Gemini did not confirm the current model.")
             self.current = reply["model"]
             self.update("config_option_update", configOptions=self.config())
             if "error" in reply or self.current != model:
-                raise RpcError(-32000, "The Gemini slot declined that selection.")
+                raise RpcError(INTERNAL_ERROR, "The Gemini slot declined that selection.")
         return self.config()
 
     def permission(self, title, kind, location, content):
@@ -381,7 +487,7 @@ class Session:
                     self.text(str(exc))
             return {"stopReason": "end_turn"}
         ids = set()
-        self.channel.send({"type": "prompt", "text": prompt})
+        self.send_request({"type": "prompt", "text": prompt})
         try:
             while not self.cancelled.is_set():
                 msg = self.channel.receive()
@@ -506,12 +612,21 @@ class Bridge:
                     result = {"configOptions": session.select_model(params.get("value"))}
         except RpcError as exc:
             error = exc
-        except (OSError, EOFError, ValueError, TypeError, subprocess.SubprocessError):
+        except (OSError, EOFError, ValueError, TypeError, subprocess.SubprocessError) as exc:
             broken = True
-            error = RpcError(-32000, "The private Gemini connection ended. Open a new T3 thread.")
+            if isinstance(exc, ValueError) and str(exc) == SLOT_SESSION_TIMEOUT:
+                error = RpcError(INTERNAL_ERROR, "The slot reported that this Gemini session "
+                                 "timed out. Open a new T3 thread to reconnect.")
+            else:
+                error = RpcError(INTERNAL_ERROR, "The private Gemini connection ended. "
+                                 "Open a new T3 thread.")
         finally:
             with self.lock:
                 try:
+                    if session.cancelled.is_set() and method == "session/new":
+                        result = None
+                        error = RpcError(INTERNAL_ERROR,
+                                         "Gemini startup was cancelled by the editor.")
                     if session.cancelled.is_set() and method == "session/prompt":
                         result, error = {"stopReason": "cancelled"}, None
                         if not self.closed:
@@ -570,7 +685,7 @@ class Bridge:
                     }})
                     return
                 if not self.initialized:
-                    raise RpcError(-32000, "Initialize the ACP connection first.")
+                    raise RpcError(INTERNAL_ERROR, "Initialize the ACP connection first.")
                 if method not in ("session/new", "session/prompt", "session/set_config_option",
                                   "session/set_model", "session/close"):
                     raise RpcError(-32601, "Method not available.")
@@ -585,10 +700,11 @@ class Bridge:
                     self.write({"id": ident, "result": {}})
                     return
                 if self.active:
-                    raise RpcError(-32000, "A Gemini request is in progress.")
+                    raise RpcError(INTERNAL_ERROR, "A Gemini request is in progress.")
                 if method == "session/new":
                     if self.session is not None:
-                        raise RpcError(-32000, "This connection already has an open Gemini thread.")
+                        raise RpcError(INTERNAL_ERROR,
+                                   "This connection already has an open Gemini thread.")
                     self.session = Session(self, params)
                 self.active = method
                 self.worker = threading.Thread(
