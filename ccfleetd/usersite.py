@@ -834,7 +834,7 @@ color:var(--muted)}
 .account-dashboard .slot-browse-link{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .account-dashboard .slot-browse-link p{margin:0;font-size:13px}
 .account-dashboard .slots{grid-template-columns:repeat(2,minmax(0,1fr));
-align-items:start;gap:24px}
+grid-auto-rows:1fr;align-items:stretch;gap:24px}
 .account-dashboard .slots>.card.slot{min-width:0;margin:0;box-shadow:var(--shadow);
 border-color:var(--rule);animation:cf-rise .48s var(--ease) both;
 transition:transform .26s var(--ease),border-color .22s var(--ease),
@@ -859,6 +859,8 @@ border-radius:10px;background:var(--surface-subtle)}
 .slot-quota-primary{margin:4px 0 16px;padding:18px;border:1px solid var(--rule);
 border-radius:var(--radius-md);background:var(--inset);box-shadow:inset 0 2px 0 var(--acc-brand)}
 .slot-quota-primary>p{margin:12px 0 0;font-size:12.5px;font-weight:600}
+.account-dashboard .slot-body .cli-access .device{flex-wrap:wrap}
+.account-dashboard .slot-body .cli-access .device>span{overflow-wrap:anywhere}
 .private-owner-slot>.usage-bars{margin:16px 0;padding:18px;border:1px solid var(--rule);
 border-radius:var(--radius-md);background:var(--inset);box-shadow:inset 0 2px 0 var(--acc-brand)}
 .account-dashboard .slot-body>p{font-size:13.5px;line-height:1.65;overflow-wrap:anywhere;
@@ -989,8 +991,10 @@ font-size:14.5px;font-weight:640;color:var(--ink)}
 .account-dashboard .account-advanced>p,
 .account-dashboard .account-advanced>div:not(.gateway-advanced-body){
 margin:14px 22px 18px;font-size:13.5px;line-height:1.7}
+@media(min-width:1280px){
+.account-dashboard .slots:has(>:nth-child(3)){grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:860px){
-.account-dashboard .slots{grid-template-columns:minmax(0,1fr);gap:18px}}
+.account-dashboard .slots{grid-template-columns:minmax(0,1fr);grid-auto-rows:auto;gap:18px}}
 @media(max-width:760px){
 .site:has(.account-dashboard) .topbar .doc-nav{display:flex;flex-wrap:nowrap;
 overflow-x:auto;justify-content:flex-start}
@@ -3119,37 +3123,61 @@ def _slot_card(
     own = slot.get("kind") == slotstates.OWNER_SLOT
     report = (_own_report(heartbeat) if own and not slot.get('private_owner')
               else _report_for(slot, heartbeat))
+    if node.get("retired_at") is not None:
+        version = (report.get("claude") or {}).get("version")
+        last_version = ('<p class="muted">' + label("Last reported Claude Code version",
+                        "最后上报的 Claude Code 版本", inline=True) + ' <code>'
+                        + escape(version) + '</code></p>') if isinstance(version, str) else ''
+        return ('<section class="card slot" data-state="retired" id="slot-'
+                + escape(slot["id"]) + '"><div class="slot-head"><h2>'
+                + escape(names.display(slot)) + ' <span class="pill disabled">'
+                + label("Retired", "已退役", inline=True) + '</span></h2></div>'
+                + '<div class="slot-body"><p>'
+                + label("This slot is offline. Its usage history is retained.",
+                        "此槽位已下线，历史用量仍可查看。", inline=True)
+                + '</p>' + last_version + '<p><a href="/account/usage">'
+                + label("Open Usage & limits", "查看用量与额度", inline=True)
+                + '</a></p></div></section>')
     if slot.get("private_owner"):
         private = node.get("private_owner") or {}
         cents = private.get("monthly_cost_usd_cents")
-        cost = f"${cents / 100:.2f} / month" if type(cents) is int else "Unknown"
+        cost = (label(f"${cents / 100:.2f} / month", f"${cents / 100:.2f} / 月", inline=True)
+                if type(cents) is int else label("Unknown", "未知", inline=True))
         connected = any(device.get("slot_id") == slot["id"] for device in account_devices or ())
         warning = (_notice(
             "This Claude account is also reported on another node. "
             "Keep one active node per account.",
             "该 Claude 账号也在其他节点上报告登录。每个账号仅保留一个活动节点。", "small lapsed")
             if "account_elsewhere" in flagged else "")
+        devices = _cli_access(slot, node, cli_devices or [], csrf, now,
+                              account_devices=account_devices, authorizer=authorizer,
+                              paid_access=paid_access,
+                              provider_ready=slot.get("inference_enabled") is True)
         return ('<section class="card slot slot-card private-owner-slot" id="slot-'
-                + escape(slot["id"]) + '"><h2>' + escape(names.display(slot)) + '</h2><p>'
+                + escape(slot["id"]) + '"><div class="slot-head"><h2>' + escape(names.display(slot))
+                + ' <span class="tag">'
                 + label("Private administrator Mac", "管理员私有 Mac", inline=True)
-                + '</p>' + _account_quota(slot, report, now, csrf,
+                + '</span></h2></div><div class="slot-body"><section class="slot-quota-primary">'
+                + _account_quota(slot, report, now, csrf,
                     heard=(heartbeat or {}).get('ts'), max_age=cfg.heartbeat_max_age_s)
-                + '<p>' + label("Operating cost: ", "运行成本：", inline=True)
-                + escape(cost) + '</p>' + machine_line + warning
-                + '<p class="muted">' + label(
+                + '<p><a href="/account/usage">'
+                + label("Open Usage & limits", "查看用量与额度", inline=True)
+                + '</a></p></section>' + machine_line + warning
+                + _slot_connect(slot, report, csrf, cfg, None, authorizer,
+                                connected=connected, paid_access=paid_access)
+                + '<div id="slot-' + escape(slot["id"]) + '-gemini" data-fleet-readonly>'
+                + gemini_link + '</div>'
+                + _slot_disclosure('Connected computers', '已连接的电脑', devices, 'slot-devices')
+                + (_slot_disclosure('Network & API traffic', '网络与 API 流量', traffic_html,
+                                    'slot-traffic') if traffic_html else '')
+                + _slot_disclosure('Slot details', '槽位详情', '<p>'
+                    + label("Operating cost: ", "运行成本：", inline=True) + cost
+                    + '</p><p class="muted">' + label(
                     "This is your own computer. Claude sign-in and maintenance happen on the Mac; "
                     "it is never offered for rent or wiped by Fleet.",
                     "这是你的自有电脑，Claude 登录和维护在 Mac 本机进行；"
                     "Fleet 不会出租或清除它。", inline=True)
-                + '</p>' + _slot_connect(slot, report, csrf, cfg, None, authorizer,
-                    connected=connected, paid_access=paid_access)
-                + '<div id="slot-' + escape(slot["id"]) + '-gemini" data-fleet-readonly>'
-                + gemini_link + '</div>'
-                + _cli_access(slot, node, cli_devices or [], csrf, now,
-                    account_devices=account_devices, authorizer=authorizer,
-                    paid_access=paid_access,
-                    provider_ready=slot.get("inference_enabled") is True)
-                + traffic_html + '</section>')
+                + '</p>', 'slot-technical') + '</div></section>')
     # A sign-in that failed, or a change of account that finished, is
     # over: it is said once, below, and the buttons come back as if nothing
     # were in flight.

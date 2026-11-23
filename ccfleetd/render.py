@@ -934,6 +934,7 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             "quota_wanted_at": mine[0].get("quota_wanted_at") if len(mine) == 1 else None,
             "owner": node["owner"], "region": node["region"],
             "enabled": node["enabled"], "status": level if node["enabled"] else "disabled",
+            "retired_at": node.get("retired_at"),
             "last_seen_ts": (hb or {}).get("ts"),
             "report_state": report_state,
             "hostname": payload.get("hostname"),
@@ -1111,11 +1112,15 @@ def _row_html(row: Mapping[str, Any], now: float) -> str:
     }.get(row.get("report_state"))
     report_note = ('<br><span class="muted">' + bi_label(*report_words, inline=True)
                    + '</span>') if report_words and row.get("enabled") else ''
+    retired = row.get("retired_at") is not None
+    state = ('<span class="pill disabled">' + admin_label("Retired") + '</span>'
+             if retired else _pill(row["status"]))
     return (
         f'<tr class="r-{escape(row["status"])}">'
-        f"<td>{_pill(row['status'])}{report_note}</td>"
+        f"<td>{state}{report_note}</td>"
         f'<td><span class="node-id">{escape(shown)}</span>'
-        + (' <span class="pill warn">reboot needed</span>' if row.get("reboot_required") else "")
+        + (' <span class="pill warn">reboot needed</span>'
+           if row.get("reboot_required") and not retired else "")
         + (f'<br><span class="muted">{escape(byline)}</span>' if byline else "") + "</td>"
         f"<td class=\"num\">{escape(_age(now, row['last_seen_ts']))}</td>"
         f'<td class="v">{version}</td>'
