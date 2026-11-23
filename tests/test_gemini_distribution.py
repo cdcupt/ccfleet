@@ -225,16 +225,17 @@ def test_approved_slot_distributes_all_signed_editor_generations(tmp_path, monke
     assert invoke(tmp_path, {"op": op}) == (2, b"")
 
 
-def test_acp_component_requires_its_own_signed_digest(tmp_path, monkeypatch):
+@pytest.mark.parametrize("version", ["0.2.18", "0.2.20"])
+def test_acp_component_requires_its_own_signed_digest(tmp_path, monkeypatch, version):
     op = "acp-client"
     name = dist.EDITOR_FILES[op]
     content = b"verified T3 helper fixture"
     pin = hashlib.sha256(content).hexdigest()
     monkeypatch.setattr(dist, "__file__", str(tmp_path / "gemini_distribution.py"))
     monkeypatch.setattr(dist, "_fetch", lambda *_: pytest.fail("unexpected network request"))
-    # Older installed clients also fetch the 0.2.18 ACP helper by its signed digest.
-    version, _, old_pins = next(entry for entry in dist.EDITOR_HISTORY if op in entry[2])
-    assert version == "0.2.18" and old_pins[op] != pin
+    # Installed clients fetch their own ACP helper by its signed digest.
+    old_pins = next(pins for v, _, pins in dist.EDITOR_HISTORY if v == version)
+    assert old_pins[op] != pin
     old = b"earlier T3 helper fixture"
     old_pin = hashlib.sha256(old).hexdigest()
     history = [(v, revision, {**pins, op: old_pin} if v == version else pins)

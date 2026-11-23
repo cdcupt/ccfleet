@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-VERSION = "0.2.20"
+VERSION = "0.2.21"
 # ACP reserves -32000 for sessions which require authentication.
 AUTH_REQUIRED = -32000
 INTERNAL_ERROR = -32603
@@ -25,6 +25,7 @@ MAX_RECORD = 4 * 1024 * 1024
 SLOT_BUSY = "Another Gemini editor is using this slot. Close it and reconnect."
 BUSY_RETRY_WINDOW = 10.0
 BUSY_RETRY_DELAY = 0.4
+CANCEL_GRACE = 15.0  # Allow the slot’s 12-second cancellation deadline to finish first.
 ALLOW = {"optionId": "allow", "kind": "allow_once", "name": "Allow once"}
 DECLINE = {"optionId": "decline", "kind": "reject_once", "name": "Decline"}
 
@@ -163,7 +164,13 @@ class Session:
         raw = params.get("cwd")
         if not isinstance(raw, str) or not Path(raw).is_absolute():
             raise invalid("Choose an existing absolute local workspace folder.")
-        self.cancelled = threading.Event()
+        self.cancelled = threading.Event()  # Transport closed; never cleared.
+        self.turn_cancelled = threading.Event()
+        self.cancel_timer = None
+        self.can_cancel_turn = False
+        self.turn_number = 0
+        self.active_turn = None
+        self.send_lock = threading.Lock()
         private = host.tools.PrivateFolders(host.fleet_home)
         try:
             self.workspace = host.tools.Workspace(
@@ -255,6 +262,9 @@ class Session:
                 or len(set(models)) != len(models)):
             raise RpcError(INTERNAL_ERROR, BAD_READY)
         self.models = models
+        capabilities = ready.get("capabilities")
+        self.can_cancel_turn = (isinstance(capabilities, dict)
+                                and capabilities.get("cancelTurn") is True)
         return {"sessionId": self.id, "configOptions": self.config(), "models": {
             "currentModelId": self.current, "availableModels": [
                 {"modelId": m, "name": m} for m in models
@@ -262,7 +272,7 @@ class Session:
         }}
 
     def unavailable(self):
-        return self.cancelled.is_set() or (
+        return self.cancelled.is_set() or self.turn_cancelled.is_set() or (
             self.process is not None and self.process.poll() is not None
         )
 
@@ -274,6 +284,45 @@ class Session:
             if self.process and self.process.poll() is None:
                 with contextlib.suppress(ProcessLookupError):
                     os.killpg(self.process.pid, signal.SIGTERM)
+
+    def cancel_turn(self):
+        if not self.can_cancel_turn:
+            self.turn_cancelled.set()
+            self.interrupt()
+            return
+        with self.lock:
+            if self.turn_cancelled.is_set() or self.cancelled.is_set():
+                return
+            self.turn_cancelled.set()
+            self.cancel_timer = threading.Timer(CANCEL_GRACE, self._expire_cancel)
+            self.cancel_timer.daemon = True
+            self.cancel_timer.start()
+        # The prompt and its cancel must reach the slot in order, even when T3 steers
+        # before the worker has started writing. The watchdog can kill a stuck write.
+        with self.send_lock:
+            if self.active_turn is not None and not self.cancelled.is_set():
+                try:
+                    self.channel.send({"type": "cancel", "turn": self.active_turn})
+                except (OSError, ValueError):
+                    self.interrupt()
+
+    def _expire_cancel(self):
+        with self.lock:
+            if self.cancel_timer is not threading.current_thread():
+                return
+            self.cancelled.set()
+            if self.process is not None and self.process.poll() is None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(self.process.pid, signal.SIGKILL)
+
+    def finish_turn(self):
+        # Called under the bridge lock before accepting another ACP request.
+        with self.lock:
+            if self.cancel_timer is not None:
+                self.cancel_timer.cancel()
+                self.cancel_timer = None
+            self.active_turn = None
+            self.turn_cancelled.clear()
 
     def _retire_channel(self, *, graceful):
         with self.lock:
@@ -324,6 +373,8 @@ class Session:
         }})
 
     def text(self, value):
+        if self.turn_cancelled.is_set():
+            return
         self.update("agent_message_chunk", content={"type": "text", "text": value})
 
     def config(self):
@@ -487,12 +538,23 @@ class Session:
                     self.text(str(exc))
             return {"stopReason": "end_turn"}
         ids = set()
-        self.send_request({"type": "prompt", "text": prompt})
+        with self.send_lock:
+            if self.turn_cancelled.is_set() or self.cancelled.is_set():
+                return {"stopReason": "cancelled"}
+            request = {"type": "prompt", "text": prompt}
+            if self.can_cancel_turn:
+                self.turn_number += 1
+                self.active_turn = self.turn_number
+                request["turn"] = self.active_turn
+            self.send_request(request)
         try:
             while not self.cancelled.is_set():
                 msg = self.channel.receive()
                 kind = msg.get("type")
                 if kind == "end" and isinstance(msg.get("reason"), str):
+                    if self.can_cancel_turn and (type(msg.get("turn")) is not int
+                                                 or msg["turn"] != self.active_turn):
+                        raise ValueError("Unexpected Gemini turn completion.")
                     reason = msg["reason"]
                     return {"stopReason": {
                         "refused": "refusal", "refusal": "refusal", "end_turn": "end_turn",
@@ -510,10 +572,14 @@ class Session:
                 response = {"type": "response", "id": ident}
                 try:
                     response["result"] = self.file_action(msg)
-                except (OSError, ValueError, subprocess.TimeoutExpired):
+                except (EOFError, OSError, ValueError, subprocess.TimeoutExpired):
                     response["error"] = "Local operation declined, protected or unavailable."
-                if not self.cancelled.is_set():
-                    self.channel.send(response)
+                # A slot-side callback may still be awaiting this reply after cancel.
+                with self.send_lock:
+                    if self.turn_cancelled.is_set():
+                        response = {"type": "response", "id": ident, "error": "Turn cancelled."}
+                    if not self.cancelled.is_set():
+                        self.channel.send(response)
             return {"stopReason": "cancelled"}
         finally:
             for _, _, tool_id in self.approved.values():
@@ -560,7 +626,7 @@ class Bridge:
         ident = "permission-" + secrets.token_urlsafe(18)
         answer = queue.Queue(maxsize=1)
         with self.lock:
-            if self.closed or session.cancelled.is_set():
+            if self.closed or session.unavailable():
                 return False
             self.pending[ident] = answer
         try:
@@ -581,9 +647,12 @@ class Bridge:
             with self.lock:
                 self.pending.pop(ident, None)
 
-    def interrupt(self):
+    def interrupt(self, *, turn_only=False):
         if self.session:
-            self.session.interrupt()
+            if turn_only:
+                self.session.cancel_turn()
+            else:
+                self.session.interrupt()
         for answer in self.pending.values():
             with contextlib.suppress(queue.Full):
                 answer.put_nowait(None)
@@ -627,10 +696,19 @@ class Bridge:
                         result = None
                         error = RpcError(INTERNAL_ERROR,
                                          "Gemini startup was cancelled by the editor.")
-                    if session.cancelled.is_set() and method == "session/prompt":
-                        result, error = {"stopReason": "cancelled"}, None
-                        if not self.closed:
-                            session.text("Cancelled. Open a new T3 thread to reconnect to Gemini.")
+                    if method == "session/prompt":
+                        steered = session.turn_cancelled.is_set()
+                        session.finish_turn()
+                        if steered or session.cancelled.is_set():
+                            result, error = {"stopReason": "cancelled"}, None
+                            if (steered and not self.closed
+                                    and (broken or session.cancelled.is_set())):
+                                if session.can_cancel_turn:
+                                    session.text("The slot did not confirm the interruption. "
+                                                 "Open a new T3 thread to reconnect.")
+                                else:
+                                    session.text("This slot needs the steering update to keep the "
+                                                 "conversation. Open a new T3 thread.")
                     if broken or session.cancelled.is_set() or self.closed or (
                             error and method == "session/new"):
                         self.discard(session)
@@ -663,7 +741,7 @@ class Bridge:
                 if (method == "session/cancel" and isinstance(params, dict) and self.session
                         and params.get("sessionId") == self.session.id
                         and self.active == "session/prompt"):
-                    self.interrupt()
+                    self.interrupt(turn_only=True)
                 return
             if type(ident) not in (str, int) or not isinstance(method, str):
                 self.error(None, -32600, "Invalid request.")
