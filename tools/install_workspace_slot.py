@@ -18,9 +18,11 @@ PREDECESSORS = {
         "92d538c2b46ced80e3d4e15422d404da4ea073a4c523c53f3c560fe6040ac24b",
     },
     "gemini_editor_slot.py": {
+        "a51e16dc133df2c5eb3fdb069118f8b6145cf716ac5cff94fb31e0704039e462",
         "f7c7a281de2483d82a80758c88c95247e2bf869497818f4d724faf1f213cf3ab",
     },
     "gemini_distribution.py": {
+        "8b8b84c94c5ed44bd69b91c6b80d498276a664a217f3894e26874cd9bacf16ad",
         "9eb1a0f14f36b629e3aef2701b260c3363c0b2536b5bbf0fd7fbf534edb00a94",
         "cad07805383d75038973e8bdff335f83cb73e5b168ffa48c40127229bee90d30",
         "419f4e4ac9aa724e19fade30c71ab6fa764e7d52164632476e8bea755ae4556a",

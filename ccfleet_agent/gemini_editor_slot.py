@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import functools
 import hashlib
 import json
 import os
@@ -47,6 +48,9 @@ MAX_TEXT = workspace_tools.LIMIT
 ACP_LIMIT = 4 * 1024 * 1024
 MCP_NAME = "ccfleetlocal"
 MAX_MODELS = 128
+CANCEL_GRACE = 12.0
+CANCEL_WAKE = object()
+CURRENT_TURN = object()
 MCP_TOOLS = {"list_project": "list", "make_project_directory": "mkdir", "test_project": "test"}
 GUIDE = (
     "You are the user's interactive CCFleet project editor. The project is on the "
@@ -123,15 +127,38 @@ class Device:
         self.authorized = authorized
         self.process = None
         self.process_lock = threading.Lock()
+        self.agent = None
+        self.turn_key = None
+        self.turn_id = None
+        self.cancelled_turn = None
+        self.cancelled_at = 0.0
 
     def start(self):
         threading.Thread(target=self._read, daemon=True).start()
         threading.Thread(target=self._watch, daemon=True).start()
 
     def _read(self):
+        last_turn = 0
         try:
             while not self.closed.is_set():
-                self.messages.put_nowait(gemini_preview.receive(self.input))
+                msg = gemini_preview.receive(self.input)
+                tag = msg.get("turn")
+                if msg.get("type") == "prompt" and "turn" in msg:
+                    if type(tag) is not int or not last_turn < tag <= 2**53 - 1:
+                        raise ValueError("invalid turn number")
+                    last_turn = tag
+                if msg.get("type") == "cancel":
+                    if (self.agent is None or set(msg) != {"type", "turn"}
+                            or type(tag) is not int or not 0 < tag <= last_turn):
+                        raise ValueError("invalid turn cancellation")
+                    if tag == last_turn and tag != self.cancelled_turn:
+                        self.cancelled_at = time.monotonic()
+                        self.cancelled_turn = tag
+                        if self.turn_id == tag:
+                            self.agent.active.clear()
+                        self.agent.cancel_turn(tag)
+                    continue
+                self.messages.put_nowait(msg)
         except (OSError, EOFError, ValueError, RecursionError, queue.Full):
             self.abort()
 
@@ -139,6 +166,9 @@ class Device:
         try:
             while not self.closed.wait(1):
                 if not self.authorized():
+                    break
+                if (self.turn_id is not None and self.cancelled_turn == self.turn_id
+                        and time.monotonic() - self.cancelled_at >= CANCEL_GRACE):
                     break
         except (OSError, ValueError, KeyError):
             pass
@@ -180,8 +210,25 @@ class Device:
         with self.socket_lock:
             gemini_preview.send(self.output, msg)
 
-    def request(self, op, **fields):
+    def begin_turn(self, tag):
+        self.turn_key = object()
+        self.turn_id = tag
+        self.agent.active.set()
+        if tag is not None and self.cancelled_turn == tag:
+            self.agent.active.clear()
+
+    def finish_turn(self):
+        self.agent.active.clear()
+        # Drain a previously issued MCP callback before releasing the wire for the next turn.
         with self.callback_lock:
+            self.turn_key = self.turn_id = None
+
+    def request(self, op, *, turn=CURRENT_TURN, **fields):
+        if turn is CURRENT_TURN:
+            turn = self.turn_key
+        with self.callback_lock:
+            if turn is None or self.turn_key is not turn or not self.agent.active.is_set():
+                raise ValueError("no active turn")
             self.next_id += 1
             self.send({"type": "request", "id": self.next_id, "op": op, **fields})
             reply = self.receive(600)
@@ -195,6 +242,8 @@ class Device:
                 raise ValueError("workspace declined or could not complete this operation")
             if set(reply) != {"type", "id", "result"}:
                 raise ValueError("invalid workspace reply")
+            if not self.agent.active.is_set():
+                raise ValueError("turn cancelled")
             return reply["result"]
 
 
@@ -211,11 +260,14 @@ def listing_path(path, project):
     return "." if relative == "." else project_files._path(relative)
 
 
-def mcp_request(device, msg, project=None):
+def mcp_request(device, msg, project=None, *, turn=CURRENT_TURN):
     """Only the selected MacBook project exposes these three tools."""
     if msg.get("jsonrpc") != "2.0" or "id" not in msg or "method" not in msg:
         return None
     method = msg["method"]
+    request = device.request
+    if turn is not CURRENT_TURN:
+        request = functools.partial(request, turn=turn)
     params = msg.get("params", {})
     reply = {"jsonrpc": "2.0", "id": msg["id"]}
     if not isinstance(params, dict):
@@ -249,7 +301,7 @@ def mcp_request(device, msg, project=None):
             if name == "test_project":
                 if args:
                     raise ValueError("custom test commands are not supported")
-                data = device.request("test")
+                data = request("test")
                 if (
                     not isinstance(data, dict)
                     or set(data) != {"exit", "output"}
@@ -259,7 +311,7 @@ def mcp_request(device, msg, project=None):
                 text_value(data["output"])
             elif name == "list_project":
                 path = listing_path(args.get("path", "."), project)
-                data = device.request("list", path=path)
+                data = request("list", path=path)
                 if (
                     not isinstance(data, list)
                     or len(data) > 1500
@@ -268,7 +320,7 @@ def mcp_request(device, msg, project=None):
                     raise ValueError("invalid directory response")
             else:
                 path = project_files._path(args.get("path"))
-                data = device.request("mkdir", path=path)
+                data = request("mkdir", path=path)
                 if data is not True:
                     raise ValueError("directory unavailable")
             result = {"content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False)}]}
@@ -295,14 +347,16 @@ class ProjectHandler(socketserver.StreamRequestHandler):
             mac_relay_client.require_peer(self.request, os.getuid())
             while True:
                 msg = json_line(self.rfile)
-                if msg.get("method") == "tools/call" and not self.server.turn.is_set():
+                turn = self.server.device.turn_key
+                if (msg.get("method") == "tools/call"
+                        and (turn is None or not self.server.turn.is_set())):
                     reply = {
                         "jsonrpc": "2.0",
                         "id": msg.get("id"),
                         "error": {"code": -32600, "message": "No interactive prompt is active"},
                     }
                 else:
-                    reply = mcp_request(self.server.device, msg, self.server.project)
+                    reply = mcp_request(self.server.device, msg, self.server.project, turn=turn)
                 if reply is not None:
                     send_line(self.wfile, reply)
         except (EOFError, OSError, ValueError):
@@ -439,6 +493,8 @@ class Agent:
         self.active = threading.Event()
         self.messages = queue.Queue(maxsize=64)
         self.seq = 0
+        self.stdin_lock = threading.Lock()
+        self.prompt_turn = None
         threading.Thread(target=self._read, daemon=True).start()
 
     def _read(self):
@@ -469,12 +525,16 @@ class Agent:
                     path = relative_path(self.root, content[0].get("path"))
                     text = text_value(content[0].get("newText"))
                     self.approvals.pop(path, None)
-                    approved = self.device.request("approve", path=path, content=text) is True
-                    if approved:
+                    try:
+                        approved = self.device.request("approve", path=path, content=text) is True
+                    except ValueError:
+                        if self.active.is_set():
+                            raise
+                    if approved and self.active.is_set():
                         if len(self.approvals) >= 32:
                             raise ValueError("too many pending edits")
                         self.approvals[path] = hashlib.sha256(text.encode()).digest()
-        kind = "allow_once" if approved else "reject_once"
+        kind = "allow_once" if approved and self.active.is_set() else "reject_once"
         option = next(
             (
                 o.get("optionId")
@@ -525,14 +585,30 @@ class Agent:
             return {}
         raise ValueError("unsupported client tool")
 
-    def rpc(self, method, params, timeout=90):
+    def cancel_turn(self, turn):
+        # Only interrupt the exact request already written to Google's input. A cancellation
+        # received before the prompt write is handled by rpc() without sending a prompt.
+        with self.stdin_lock:
+            if self.prompt_turn == turn:
+                send_line(self.process.stdin, {
+                    "jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": self.sid}
+                })
+        with contextlib.suppress(queue.Full):
+            self.messages.put_nowait(CANCEL_WAKE)
+
+    def rpc(self, method, params, timeout=90, *, turn=None):
         self.seq += 1
-        send_line(
-            self.process.stdin,
-            {"jsonrpc": "2.0", "id": self.seq, "method": method, "params": params},
-        )
+        with self.stdin_lock:
+            if turn is not None and self.device.cancelled_turn == turn:
+                return {"stopReason": "cancelled"}
+            send_line(self.process.stdin, {
+                "jsonrpc": "2.0", "id": self.seq, "method": method, "params": params
+            })
+            self.prompt_turn = turn
         until = time.monotonic() + timeout
         while True:
+            if turn is not None and self.device.cancelled_turn == turn:
+                until = min(until, self.device.cancelled_at + CANCEL_GRACE)
             try:
                 msg = self.messages.get(timeout=max(0.001, until - time.monotonic()))
             except queue.Empty:
@@ -543,13 +619,20 @@ class Agent:
                 raise EditorError("The Gemini slot timed out. Reopen the editor to continue.")
             if msg is None:
                 raise EditorError("The Google editor agent stopped on the slot.")
+            if msg is CANCEL_WAKE:
+                continue
             if "method" not in msg:
+                with self.stdin_lock:
+                    self.prompt_turn = None
                 if msg.get("id") != self.seq:
                     raise ValueError("unexpected agent response")
                 if "error" in msg:
                     error = msg["error"]
                     if not isinstance(error, dict) or type(error.get("code")) is not int:
                         raise ValueError("invalid agent error")
+                    if (turn is not None and self.device.cancelled_turn == turn
+                            and error["code"] == -32800):
+                        return {"stopReason": "cancelled"}
                     if method == "session/new" and error["code"] == -32000:
                         raise EditorError(LOGIN_NEEDED)
                     if method == "session/set_model":
@@ -582,7 +665,8 @@ class Agent:
                         "message": "Client operation declined or unavailable.",
                     }
                 }
-            send_line(self.process.stdin, {"jsonrpc": "2.0", "id": msg["id"], **reply})
+            with self.stdin_lock:
+                send_line(self.process.stdin, {"jsonrpc": "2.0", "id": msg["id"], **reply})
 
     def initialize(self):
         result = self.rpc(
@@ -763,7 +847,9 @@ def session_profile(home, session):
 
 
 def interact(agent, device):
-    device.send({"type": "ready", "model": agent.model, "models": agent.models})
+    device.agent = agent
+    device.send({"type": "ready", "model": agent.model, "models": agent.models,
+                 "capabilities": {"cancelTurn": True}})
     while True:
         msg = device.receive(3600)
         if msg == {"type": "close"}:
@@ -776,12 +862,14 @@ def interact(agent, device):
             else:
                 device.send({"type": "model", "model": agent.model})
             continue
-        if set(msg) != {"type", "text"} or msg.get("type") != "prompt":
+        if (msg.get("type") != "prompt"
+                or set(msg) not in ({"type", "text"}, {"type", "text", "turn"})):
             raise EditorError("The workspace sent an unexpected message.")
         prompt = text_value(msg["text"], 65536)
         if not prompt.strip():
             raise EditorError("Enter a project request to start a turn.")
-        agent.active.set()
+        tag = msg.get("turn")
+        device.begin_turn(tag)
         try:
             response = agent.rpc(
                 "session/prompt",
@@ -790,14 +878,20 @@ def interact(agent, device):
                     "prompt": [{"type": "text", "text": GUIDE + prompt}],
                 },
                 timeout=900,
+                turn=tag,
             )
         finally:
-            agent.active.clear()
+            device.finish_turn()
             agent.approvals.clear()
         reason = response.get("stopReason")
         if not isinstance(reason, str) or not re.fullmatch(r"[a-z_]{1,48}", reason):
             raise EditorError("The Gemini editor returned an incomplete turn.")
-        device.send({"type": "end", "reason": reason})
+        end = {"type": "end", "reason": reason}
+        if tag is not None:
+            end["turn"] = tag
+            if device.cancelled_turn == tag:
+                end["reason"] = "cancelled"
+        device.send(end)
 
 
 def run_editor(home, device, binary, session):

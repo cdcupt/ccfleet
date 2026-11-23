@@ -26,7 +26,7 @@ EDITOR_FILES = {
     "workspace-tools": "workspace_tools.py",
     "acp-client": "gemini_acp_client.py",
 }
-EDITOR_VERSION = "0.2.20"
+EDITOR_VERSION = "0.2.21"
 EDITOR_HISTORY = (
     ("0.2.15", "ee147f63c559f4f8deb9e5962501412168edf27e", {
         "editor-client": "0a5afe3d72241511cea9581b3e5bcb2278ead352d0f9f5da375d70f4fb2daad0",
@@ -44,6 +44,11 @@ EDITOR_HISTORY = (
         "editor-client": "5bbe2e808877f25e1be746e94111fb7b3c1551b9c3c45ba8bcde0352ddb12906",
         "workspace-tools": "a25cae8d7ef75f66b194cac2f61b3547ebf94afd6452620bad3f06a985f68c70",
         "acp-client": "a5177386f6ca96f4c89e0c2157a7867114125f62b75d0db71363738cd6841ddd",
+    }),
+    ("0.2.20", "e056fb4127d34ee9e1918e0fbe5fc3e909a2368d", {
+        "editor-client": "5bbe2e808877f25e1be746e94111fb7b3c1551b9c3c45ba8bcde0352ddb12906",
+        "workspace-tools": "a25cae8d7ef75f66b194cac2f61b3547ebf94afd6452620bad3f06a985f68c70",
+        "acp-client": "d014f38cbca2258a2a6c2432382c145146fb4eab619cf71530cb9a00f1a46152",
     }),
 )
 
