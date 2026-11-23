@@ -1671,6 +1671,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
            + f'</h2>{allowance}</div>{claim}</div>')
         + (f'<div class="slots">{cards}</div>' if cards else "")
         + (_wallet_history(store, account) if wallet_routes.enabled(cfg) else "")
+        + ('<p><a href="/account/openrouter">' + label('OpenRouter models and usage',
+           'OpenRouter 模型与用量', inline=True) + '</a></p>' if cfg.openrouter_models else '')
         + gateway_ui.panel(store, cfg, account, csrf, held)
         + ('<details class="account-advanced"><summary>'
            + label('Email notifications', '邮件通知', inline=True) + '</summary>'

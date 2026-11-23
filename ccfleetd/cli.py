@@ -36,6 +36,9 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("check", help="evaluate every node once and print transitions")
     sub.add_parser("alert-test", help="send a test message through the configured notifier")
 
+    receipt = sub.add_parser("openrouter-reconcile", help="verify a pending generation receipt")
+    receipt.add_argument("request_id")
+    receipt.add_argument("generation_id")
     routes = sub.add_parser("api-model", help="manage an experimental slot-bound API model"
                             ).add_subparsers(dest="action", required=True)
     routes.add_parser("endpoints", help="list single-slot connection IDs").add_argument("slot")
@@ -626,6 +629,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             cfg = Config(**{**cfg.__dict__, "db_path": args.db})
         store = Store(cfg.db_path)
         try:
+            if args.command == "openrouter-reconcile":
+                from . import openrouter
+                service = openrouter.Service(cfg, store)
+                if not service.models or not service.lookup(args.request_id, args.generation_id):
+                    raise StoreError("no verified matching OpenRouter receipt")
+                print("OpenRouter receipt settled.")
+                return EXIT_OK
             if args.command == "api-model":
                 if args.action == "endpoints":
                     slot = store.get_slot(args.slot)

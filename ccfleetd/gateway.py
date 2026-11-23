@@ -124,6 +124,8 @@ def session_id(headers, body: dict[str, Any]) -> str:
 class GatewayRuntime:
     def __init__(self, cfg, store, *, transport_factory=None, clock=time.monotonic,
                  wall_clock=time.time):
+        from . import openrouter
+        self.openrouter = openrouter.Service(cfg, store)
         self.cfg, self.store, self.clock = cfg, store, clock
         self.wall_clock = wall_clock
         self.transport_factory = transport_factory or transport_attempt
@@ -146,6 +148,7 @@ class GatewayRuntime:
         self.stopping.set()
         with self.capacity:
             self.capacity.notify_all()
+        self.openrouter.stop.set()
         return self.throughput.close() if self.throughput is not None else True
 
     @property
@@ -493,27 +496,37 @@ class GatewayRuntime:
                 attempt.close()
                 return
 
-    def handle(self, handler) -> None:
+    def handle(self, handler, *, routed=False) -> None:
         handler.close_connection = True
-        if not self.enabled:
+        if not (self.openrouter.models if routed else self.enabled):
             model_error(handler, 503, "The model gateway is not enabled.")
             return
-        key = authenticate(handler.headers, self.store, now=time.time())
+        path = handler.path.removeprefix("/openrouter") if routed else handler.path
+        if routed:
+            from .openrouter import credential
+            token = credential(handler.headers)
+            owner = self.store.openrouter_principal(token)
+            key = {"id": "openrouter:" + owner, "slot_ids": []} if owner else None
+        else:
+            key = authenticate(handler.headers, self.store, now=time.time())
         if key is None:
             model_error(handler, 401, "A valid endpoint API key is required.")
             return
-        handler._gateway_native_no_retry = key.get("provider") == gateway_providers.DEVIN
+        handler._gateway_native_no_retry = routed or key.get("provider") == gateway_providers.DEVIN
         names = [name.lower() for name in handler.headers]
         lengths = handler.headers.get_all("Content-Length", [])
         pins = handler.headers.get_all("X-CCFleet-Slot", [])
         if (len(names) != len(set(names)) or handler.headers.get_all("Transfer-Encoding")
                 or handler.headers.get_all("Origin") or handler.headers.get_all("Expect")
-                or handler.headers.get_all("Content-Encoding") or handler.path not in PATHS
+                or handler.headers.get_all("Content-Encoding") or path not in PATHS
                 or len(lengths) != 1 or not lengths[0].isascii() or not lengths[0].isdigit()
                 or len(lengths[0]) > 10 or str(int(lengths[0])) != lengths[0]
                 or len(pins) > 1
                 or any(not wire._header_value(value) for value in handler.headers.values())):
             model_error(handler, 400, "The model request framing is invalid.")
+            return
+        if routed and path not in NATIVE_MESSAGE_PATHS:
+            model_error(handler, 501, "OpenRouter token counting is unavailable.")
             return
         size = int(lengths[0])
         if not 0 < size <= self.cfg.gateway_max_body_bytes:
@@ -552,33 +565,34 @@ class GatewayRuntime:
                     raise ValueError("not an object")
                 if "metadata" in value and not isinstance(value["metadata"], (dict, type(None))):
                     raise ValueError("metadata")
-                session = session_id(handler.headers, value)
-                model = value.get("model", "")
-                if not isinstance(model, str) or len(model) > 256:
-                    raise ValueError("model")
-                if model.startswith("fleet-"):
-                    provider = next((p for p, alias in api_model_routes.ALIASES.items()
-                                     if model == alias), None)
-                    if provider is None:
-                        model_error(handler, 400, "Unknown Fleet model.")
+                session = "" if routed else session_id(handler.headers, value)
+                if not routed:
+                    model = value.get("model", "")
+                    if not isinstance(model, str) or len(model) > 256:
+                        raise ValueError("model")
+                    if model.startswith("fleet-"):
+                        provider = next((p for p, alias in api_model_routes.ALIASES.items()
+                                         if model == alias), None)
+                        if provider is None:
+                            model_error(handler, 400, "Unknown Fleet model.")
+                            return
+                        key = {**key, "provider": provider}
+                        handler._gateway_native_no_retry = True
+                    if (key.get("provider") in (*api_model_routes.ALIASES, gateway_providers.DEVIN)
+                            and handler.path not in NATIVE_MESSAGE_PATHS):
+                        model_error(handler, 501, "Token counting is unavailable for this route.")
                         return
-                    key = {**key, "provider": provider}
-                    handler._gateway_native_no_retry = True
-                if (key.get("provider") in (*api_model_routes.ALIASES, gateway_providers.DEVIN)
-                        and handler.path not in NATIVE_MESSAGE_PATHS):
-                    model_error(handler, 501, "Token counting is unavailable for this route.")
-                    return
-                session = ("" if key.get("provider") in api_model_routes.ALIASES
-                           else self._session_key(key, session))
-                model_key = hashlib.sha256(model.encode()).hexdigest()
-                for field in wire.IDENTITY_FIELDS:
-                    value.pop(field, None)
-                if key.get("provider") == gateway_providers.DEVIN:
-                    value = gateway_providers.native_client_request(value)
-                body = json.dumps(value, ensure_ascii=False, separators=(",", ":"),
-                                  allow_nan=False).encode()
-                if len(body) > self.cfg.gateway_max_body_bytes:
-                    raise ValueError("expanded body")
+                    session = ("" if key.get("provider") in api_model_routes.ALIASES
+                               else self._session_key(key, session))
+                    model_key = hashlib.sha256(model.encode()).hexdigest()
+                    for field in wire.IDENTITY_FIELDS:
+                        value.pop(field, None)
+                    if key.get("provider") == gateway_providers.DEVIN:
+                        value = gateway_providers.native_client_request(value)
+                    body = json.dumps(value, ensure_ascii=False, separators=(",", ":"),
+                                      allow_nan=False).encode()
+                    if len(body) > self.cfg.gateway_max_body_bytes:
+                        raise ValueError("expanded body")
                 headers = wire.sanitize_request_headers({
                     name.lower(): item for name, item in handler.headers.items()})
             except (ValueError, UnicodeError, RecursionError):
@@ -593,7 +607,10 @@ class GatewayRuntime:
             # Do not retain two additional full-context copies until it finishes.
             del raw, value
             handler.connection.settimeout(15)
-            self._forward(handler, key, session, pinned, model_key, headers, body)
+            if routed:
+                self.openrouter.forward(handler, owner, token, value, headers, size)
+            else:
+                self._forward(handler, key, session, pinned, model_key, headers, body)
         finally:
             self._release(key["id"], size)
 

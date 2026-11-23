@@ -573,3 +573,24 @@ def test_native_picker_has_three_explicit_model_routes(client, monkeypatch, prov
         {"model": "fleet-gpt", "label": "GPT · API"},
         {"model": "fleet-gemini", "label": "Gemini · API"},
     ]}
+
+
+def test_openrouter_launch_uses_account_key_and_catalog_without_slot(client, monkeypatch):
+    token = "ccf_or_" + "a" * 43
+    ids = ["deepseek/deepseek-v4.1-flash", "deepseek/deepseek-v4-pro"]
+    monkeypatch.setenv("CCFLEET_OPENROUTER_TOKEN", token)
+    monkeypatch.setitem(client.scope, "load_config", lambda: pytest.fail("slot pairing read"))
+    def catalog(url, secret, method):
+        assert (url, secret, method) == ("https://ccfleet.io/openrouter/v1/models", token, "GET")
+        return {"data": [{"id": m} for m in ids]}
+    monkeypatch.setitem(client.scope, "api_json", catalog)
+    assert client.loaded["main"](["openrouter", "--check"]) == 0
+    assert not client.calls
+    assert client.loaded["main"](["openrouter", "--model", ids[1]]) == 0
+    command, kwargs, path, settings, mode = client.calls[0]
+    assert mode == 0o600 and not path.exists() and token not in command
+    assert "CCFLEET_OPENROUTER_TOKEN" not in kwargs["env"]
+    assert settings["env"]["ANTHROPIC_AUTH_TOKEN"] == token
+    assert settings["env"]["ANTHROPIC_API_KEY"] == ""
+    assert settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == ids[1]
+    assert [v["model"] for v in settings["modelPicker"]["options"]] == ids

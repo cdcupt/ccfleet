@@ -414,6 +414,8 @@ NEITHER = {
     ("agy_devices", "device_id"),
     ("agy_enrollments", "id"), ("agy_enrollments", "account_id"), ("agy_enrollments", "claim_id"),
     ("cli_pairings", "api_model_binding_id"), ("cli_devices", "api_model_binding_id"),
+    ("openrouter_accounts", "account_id"), ("openrouter_requests", "id"),
+    ("openrouter_requests", "account_id"), ("openrouter_requests", "generation_id"),
     ("api_model_bindings", "id"), ("api_model_bindings", "owner_account_id"),
     ("api_model_bindings", "claim_id"), ("api_model_grants", "binding_id"),
     ("api_model_grants", "key_id"),("accounts", "id"), ("payments", "id"), ("payments", "account_id"),

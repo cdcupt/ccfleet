@@ -95,6 +95,15 @@ ccfleet pair gemini</code></pre></li>
 <p>每个槽位最多可保留四份符合条件的会话数据，每份上限为 128 MiB。如果原对话无法恢复，可按提示输入 <code>/reconnect</code>，在当前 T3 对话窗口重新开始。如果仍在使用 0.2.21，请参阅<a href="https://ccfleet.io/zh/docs/guide#gemini-recovery">恢复和升级说明</a>。</p>
 <p>每台已配对的 Mac 都有独立的设备凭据。移除一台 Mac 即可撤销它的访问权限。如果它仍保存着配对码，请更换或停用该码，防止再次配对。其他已配对的 Mac 可继续使用。想在终端中对话时，在项目目录运行 <code>ccfleet gemini</code>。</p>
 </div></div></section>
+<section id="openrouter"><div class="bi"><div class="copy-en" lang="en">
+<h2>Use OpenRouter with local Claude Code</h2>
+<p>When Fleet enables OpenRouter, sign in at <a href="/account/openrouter">OpenRouter models and usage</a>, add Fleet credit, and issue a Fleet key. No slot or Claude subscription is required. The gateway sends your conversation and local tool results to OpenRouter and the provider serving your selected model. Tool approvals and file changes happen on your computer.</p>
+<p>In a client that includes the OpenRouter command, run <code>ccfleet openrouter --check</code> to list the available models, then <code>ccfleet openrouter</code> in your project. Enter your Fleet key at the hidden prompt or supply it through <code>CCFLEET_OPENROUTER_TOKEN</code> from your secret manager. Use <code>/model</code> during a conversation or start with <code>ccfleet openrouter --model deepseek/deepseek-v4.1-flash</code> when that model is offered. Use <code>ccfleet claude</code> for your subscription.</p>
+<p>Fleet reserves credit before dispatch and charges OpenRouter’s actual generation cost plus 5%. For $1.00 of usage, the total is $1.05. Fractional cents carry forward across requests. See your available balance, holds and receipts on the OpenRouter account page. The gateway supports text and local tools. Select models with tool support.</p>
+</div><div class="copy-zh" lang="zh-Hans"><h2>在本机 Claude Code 中使用 OpenRouter</h2>
+<p>Fleet 启用此功能后，登录<a href="/account/openrouter">OpenRouter 模型与用量</a>，为 Fleet 余额充值并生成 Fleet 密钥。无需领取槽位或订阅 Claude。网关会将对话和本地工具结果发送给 OpenRouter 与所选模型的服务商。工具授权与文件修改在本机进行。</p>
+<p>在包含 OpenRouter 命令的客户端运行 <code>ccfleet openrouter --check</code> 查看模型，在项目内运行 <code>ccfleet openrouter</code>，按隐藏提示输入 Fleet 密钥，或通过密钥管理器设置 <code>CCFLEET_OPENROUTER_TOKEN</code>。对话中输入 <code>/model</code> 切换模型。若已提供 DeepSeek，可运行 <code>ccfleet openrouter --model deepseek/deepseek-v4.1-flash</code>。订阅路线使用 <code>ccfleet claude</code>。</p>
+<p>Fleet 会先预留余额，然后按 OpenRouter 实际费用加收 5%。用量费 $1.00，合计 $1.05。不足一美分的金额会结转。账户页显示可用余额、预留金额与用量明细。支持文本和本地工具，请选择兼容工具调用的模型。</p></div></div></section>
 <section id="api-model-picker"><div class="bi"><div class="copy-en" lang="en">
 <h2>Switch models in local Claude Code</h2>
 <p>For a private Mac mini, sign in to Fleet and select <a href="/account/gemini">Set up Gemini</a> on its slot. Enter your Google Cloud project number, Gemini model and API key once. Your browser encrypts the key for the mini’s login Keychain. Choose a new computer to receive a ten-minute, single-use Fleet pairing code for your MacBook. An existing connection can be linked on the same page.</p>

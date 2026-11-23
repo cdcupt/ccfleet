@@ -153,7 +153,8 @@ class TopupStoreMixin:
                 return dict(previous)
             if spending_blocked(conn, account_id):
                 raise StoreError("account credit needs payment review before another top-up")
-            if self._wallet_balance(conn, account_id) + amount_cents > wallet.MAX_CENTS:
+            if (self._wallet_balance(conn, account_id, holds=False)
+                    + amount_cents > wallet.MAX_CENTS):
                 raise StoreError("the top-up would exceed the supported balance")
             order_id = secrets.token_hex(16)
             conn.execute(
@@ -354,7 +355,8 @@ class TopupStoreMixin:
                 if collision:
                     raise WalletReplayMismatch("the payment already belongs to a different top-up")
                 if (
-                    self._wallet_balance(conn, order["account_id"]) + order["amount_cents"]
+                    self._wallet_balance(conn, order["account_id"], holds=False)
+                    + order["amount_cents"]
                     > wallet.MAX_CENTS
                 ):
                     raise StoreError(

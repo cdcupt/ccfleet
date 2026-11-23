@@ -31,6 +31,8 @@ from . import (
     gemini_setup,
     machine_health,
     oauth,
+    openrouter,
+    openrouter_account,
     private_owner,
     reference_docs,
     sessions,
@@ -138,7 +140,8 @@ def access_log_route(target: Any) -> str:
                 "/api/cli/gateway/options", "/api/cli/gateway/revoke", "/api/gateway/status",
                 "/account/gateway/create", "/account/gateway/update", "/account/gateway/revoke",
                 "/account/devin-trial", "/account/devin-trial/create",
-                "/account/devin-trial/revoke",
+                "/account/devin-trial/revoke", "/account/openrouter", "/account/openrouter/create",
+                "/account/openrouter/revoke", "/openrouter/v1/messages", "/openrouter/v1/models",
                 "/trial/v1/messages", "/trial/v1/messages/count_tokens"}:
         return path
     if path.rstrip("/") == CONSOLE_PATH:
@@ -379,7 +382,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def setup(self) -> None:
             super().setup()
-            if ctx.cfg.gateway_enabled or ctx.cfg.devin_trial_enabled:
+            if ctx.cfg.gateway_enabled or ctx.cfg.devin_trial_enabled or ctx.cfg.openrouter_models:
                 self.connection.settimeout(ctx.cfg.gateway_header_timeout_s)
                 self.rfile = _HeaderBudgetReader(self.rfile)
 
@@ -387,7 +390,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if isinstance(self.rfile, _HeaderBudgetReader):
                 self.rfile.remaining = 65536
             self._header_timer = None
-            if ctx.cfg.gateway_enabled or ctx.cfg.devin_trial_enabled:
+            if ctx.cfg.gateway_enabled or ctx.cfg.devin_trial_enabled or ctx.cfg.openrouter_models:
                 def expire_headers():
                     with contextlib.suppress(OSError):
                         self.connection.shutdown(socket.SHUT_RDWR)
@@ -411,7 +414,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     self._header_timer.cancel()
 
         def handle_expect_100(self) -> bool:
-            if getattr(self, "path", "").startswith(("/v1/", "/trial/v1/")):
+            if getattr(self, "path", "").startswith(("/v1/", "/trial/v1/", "/openrouter/v1/")):
                 gateway.model_error(self, 417, "Expect requests are not supported.")
                 return False
             return super().handle_expect_100()
@@ -477,7 +480,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                        "/privacy", "/status",
                        "/account/usage",
                        "/account/purchase", "/account/renew", "/account/topup",
-                       "/account/devin-trial",
+                       "/account/devin-trial", openrouter.PAGE,
                 "/account/subscribe", "/account/subscriptions",
                 "/account/subscriptions/portal", "/account/subscriptions/cancel",
                 "/account/subscriptions/resume", "/account/subscriptions/cancel-checkout",
@@ -922,6 +925,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 self._redirect("/account")
                 return
             form = self._form(strict=path in gemini_setup.ACTIONS or path in {
+                "/account/openrouter/create", "/account/openrouter/revoke",
                 "/account/purchase", "/account/renew", "/account/topup",
                 "/account/subscribe", "/account/subscriptions", "/account/subscriptions/portal",
                 "/account/subscriptions/cancel", "/account/subscriptions/resume",
@@ -946,7 +950,15 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 else:
                     self._send(outcome.status, outcome.body.encode("utf-8"), GEMINI_HEADERS)
                 return
-            if path == "/account/topup":
+            if path in {"/account/openrouter/create", "/account/openrouter/revoke"}:
+                service = ctx.gateway.openrouter
+                if not self._payment_site() or not service.models:
+                    self._json(404, {"error": "OpenRouter unavailable"})
+                    return
+                issued = ctx.store.openrouter_key(account["id"], revoke=path.endswith("/revoke"))
+                outcome = openrouter_account.page(
+                    service, ctx.cfg, account, session_id, issued=issued)
+            elif path == "/account/topup":
                 outcome = stripe_routes.start(ctx.billing, ctx.cfg, account, form, time.time())
             elif path == "/account/subscribe":
                 outcome = subscription_routes.start(ctx.recurring, ctx.store, ctx.cfg,
@@ -1355,6 +1367,18 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     return
                 self._send(outcome.status, outcome.body.encode("utf-8"), GEMINI_HEADERS)
                 return
+            if path == "/openrouter/v1/models":
+                service = ctx.gateway.openrouter
+                if not self._payment_site() or not service.models:
+                    self._json(404, {"error": "OpenRouter unavailable"})
+                elif not ctx.store.openrouter_principal(openrouter.credential(self.headers)):
+                    self._json(401, {"error": "A Fleet OpenRouter key is required."})
+                else:
+                    models = [{"id": m, "type": "model", "display_name": m + " · Fleet +5%"}
+                              for m in service.models]
+                    self._json(200, {"data": models, "has_more": False, "first_id": models[0]["id"],
+                                     "last_id": models[-1]["id"]}, {"Cache-Control": "no-store"})
+                return
             if path == "/v1/models":
                 if not self._product_site() or ctx.cfg.broker_only or not ctx.gateway.enabled:
                     self._json(404, {"error": "model catalog unavailable"})
@@ -1484,6 +1508,14 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 self._send(200, usersite.usage_page(
                     ctx.store, ctx.cfg, account, session_id, time.time(), note).encode("utf-8"),
                            HTML_HEADERS)
+            elif path == openrouter.PAGE:
+                if not self._payment_site():
+                    self._json(404, {"error": "not found"})
+                    return
+                outcome = openrouter_account.page(
+                    ctx.gateway.openrouter, ctx.cfg, *self._signed_in())
+                self._send(outcome.status, outcome.body.encode(), {**HTML_HEADERS,
+                           "Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
             elif path == trial_routes.PAGE:
                 if not self._product_site() or ctx.cfg.broker_only:
                     self._json(404, {"error": "not found"})
@@ -1702,6 +1734,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                         "/account/subscriptions/cancel-checkout"}
                     and not self._payment_site()):
                 self._json(404, {"error": "not found"})
+                return
+            if path in ("/openrouter/v1/messages", "/openrouter/v1/messages/count_tokens"):
+                if not self._payment_site() or not ctx.gateway.openrouter.models:
+                    gateway.model_error(self, 404, "OpenRouter is unavailable.")
+                else:
+                    ctx.gateway.handle(self, routed=True)
                 return
             if path in ("/v1/messages", "/v1/messages/count_tokens"):
                 if not self._product_site() or ctx.cfg.broker_only:
@@ -2175,7 +2213,7 @@ def build_server(ctx: Context, host: Optional[str] = None,
     host = ctx.cfg.bind_host if host is None else host
     port = ctx.cfg.bind_port if port is None else port
     server = (_BoundedHTTPServer((host, port), make_handler(ctx), ctx.cfg.gateway_max_connections)
-              if ctx.cfg.gateway_enabled or ctx.cfg.devin_trial_enabled
+              if ctx.cfg.gateway_enabled or ctx.cfg.devin_trial_enabled or ctx.cfg.openrouter_models
               else ThreadingHTTPServer((host, port), make_handler(ctx)))
     server.daemon_threads = True
     return server
@@ -2189,6 +2227,11 @@ def serve(ctx: Context) -> None:
                               name="ccfleet-monitor", daemon=True)
     if not ctx.cfg.broker_only:
         worker.start()
+    router_worker = None
+    if ctx.gateway.openrouter.models:
+        router_worker = threading.Thread(target=ctx.gateway.openrouter.reconcile,
+                                         name="ccfleet-openrouter-receipts", daemon=True)
+        router_worker.start()
     metrics_worker = None
     if ctx.machine_health is not None:
         metrics_worker = threading.Thread(target=ctx.machine_health.run, args=(stop,),
@@ -2213,6 +2256,8 @@ def serve(ctx: Context) -> None:
         stop.set()
         ctx.gateway.close()
         server.server_close()
+        if router_worker is not None:
+            router_worker.join(timeout=12)
         if metrics_worker is not None:
             metrics_worker.join(timeout=2)
         if traffic_worker is not None:
