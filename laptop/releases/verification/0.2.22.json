@@ -1,0 +1,76 @@
+{
+  "version": "0.2.22",
+  "verified_on": "2026-11-23",
+  "release": {
+    "source": "a415c3af190b160b5f31de594802c553a0393794",
+    "public_merge": "b68afee9e0b0a09a5c9003fe7d24d94f2bfb747c",
+    "serving_merge": "8dcf894a7b59a8149964c465f19fa61ccdf45c3a",
+    "pull_requests": [
+      "https://github.com/cdcupt/ccfleet/pull/256",
+      "https://github.com/cdcupt/ccfleet/pull/257"
+    ],
+    "channel_snapshot": "https://raw.githubusercontent.com/cdcupt/ccfleet/b68afee9e0b0a09a5c9003fe7d24d94f2bfb747c/laptop/releases/stable.json",
+    "manifest": "https://raw.githubusercontent.com/cdcupt/ccfleet/0a493b16cfc0e3b06ac6ab5d5688fe66a3a70147/laptop/releases/0.2.22.json",
+    "manifest_signature": "https://raw.githubusercontent.com/cdcupt/ccfleet/0a493b16cfc0e3b06ac6ab5d5688fe66a3a70147/laptop/releases/0.2.22.json.sig",
+    "verified_manifest_files": 8,
+    "upgraded_from": "0.2.21",
+    "candidate_rollback_verified": true
+  },
+  "recovery_checks": [
+    {
+      "surface": "Signed ccfleet gemini terminal",
+      "source": "a415c3af190b160b5f31de594802c553a0393794",
+      "provider": "Live Gemini Neon-xhigh",
+      "environment": "Isolated controller and PTY",
+      "turns": 3,
+      "result": "Resumed the original Gemini conversation after an approval was interrupted. A late approval left the file absent."
+    },
+    {
+      "surface": "T3 0.1.7",
+      "source": "87f835b673fbd8779637c0f19286b819fcde4cc6",
+      "provider": "Live Gemini Neon-xhigh",
+      "environment": "Isolated controller",
+      "result": "Steer after a silent connection drop resumed the same T3 thread and Gemini conversation. The unapproved file remained absent."
+    },
+    {
+      "surface": "Orca Quick Command terminal entry point",
+      "source": "9332d00af7e140af859c928ead55b5c6ada34c63",
+      "provider": "Simulated",
+      "environment": "PTY with SSH and TLS WebSocket",
+      "gui_exercised": false,
+      "result": "Three instructions arrived exactly once. A new edit required fresh approval."
+    },
+    {
+      "surface": "Herdr desktop and TUI",
+      "source": "9332d00af7e140af859c928ead55b5c6ada34c63",
+      "versions": [
+        "herdr-app 0.1.16",
+        "herdr 0.9.5"
+      ],
+      "provider": "Simulated",
+      "environment": "Actual applications with a test slot",
+      "result": "Both terminals resumed the same test conversation. Each processed three explicit instructions and one newly approved write."
+    }
+  ],
+  "frontend_soak": {
+    "source": "2cc26d9c05b90f2a0b09fa56b019f21eab5c01dd",
+    "surface": "T3 0.1.7",
+    "provider": "Live Gemini Neon-xhigh",
+    "environment": "Isolated local transport",
+    "duration_seconds": 5278.2,
+    "turns": 9,
+    "injected_disconnects": 2,
+    "same_conversation": true,
+    "interrupted_prompts_replayed": 0,
+    "project_tests_passed": 28,
+    "randomized_editing_actions": 2500
+  },
+  "documentation": {
+    "en": "https://ccfleet.io/en/docs/guide#gemini-recovery",
+    "zh": "https://ccfleet.io/zh/docs/guide#gemini-recovery",
+    "browser_widths_px": [
+      390,
+      1280
+    ]
+  }
+}
