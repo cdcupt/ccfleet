@@ -248,6 +248,170 @@ def test_cancel_and_late_approval_cannot_mutate_file(host):
     assert new["result"]["sessionId"] != sid
 
 
+def steering_peer(host, turns):
+    setup = SLOT.split('put({"type":"ready"', 1)[0]
+    host.bridge.command[4] = setup + """
+put({"type":"ready","model":current,"models":models,"capabilities":{"cancelTurn":True}})
+""" + turns
+
+
+@pytest.mark.parametrize("finish", ["cancelled", "end_turn"])
+def test_steer_keeps_session_and_rejects_late_old_turn_actions(host, finish):
+    steering_peer(host, f"finish = {finish!r}\n" + """
+first = get()
+assert first == {"type":"prompt","turn":1,"text":"edit this file"}
+put({"type":"request","op":"approve","id":1,"path":"draft.txt","content":"old"})
+assert get() == {"type":"cancel","turn":1}
+assert "error" in get()
+put({"type":"text","text":"obsolete output"})
+assert not tool(2,"write",path="draft.txt",content="old")
+put({"type":"end","reason":finish,"turn":1})
+second = get()
+assert second == {"type":"prompt","turn":2,"text":"show me the preview"}
+assert not tool(3,"write",path="draft.txt",content="old")
+put({"type":"text","text":"Preview in the original conversation"})
+put({"type":"end","reason":"end_turn","turn":2})
+assert get() == {"type":"close"}
+""")
+    sid = host.open()
+    process = host.bridge.session.process
+    first = host.prompt(sid, "edit this file")
+    while True:
+        msg = host.get()
+        if msg.get("method") == "session/request_permission":
+            break
+    host.send("session/cancel", {"sessionId": sid}, notify=True)
+    host.send("session/cancel", {"sessionId": sid}, notify=True)
+    assert host.recv(first)["result"] == {"stopReason": "cancelled"}
+    host.bridge.handle({"jsonrpc": "2.0", "id": msg["id"], "result": {
+        "outcome": {"outcome": "selected", "optionId": "allow"}}})
+    assert host.recv(host.prompt(sid, "show me the preview"))["result"] == {"stopReason": "end_turn"}
+    assert host.bridge.session.process is process and process.poll() is None
+    assert not (host.project / "draft.txt").exists()
+    texts = [m["params"]["update"]["content"]["text"] for m in host.history
+             if m.get("method") == "session/update"
+             and m["params"]["update"]["sessionUpdate"] == "agent_message_chunk"]
+    assert "Preview in the original conversation" in texts
+    assert not any("obsolete" in text or "new T3 thread" in text for text in texts)
+    assert host.recv(host.send("session/close", {"sessionId": sid}))["result"] == {}
+
+
+@pytest.mark.parametrize("end", ["unresponsive", "wrong-turn", "closed"])
+def test_unconfirmed_cancel_discards_only_the_broken_session(host, monkeypatch, end):
+    monkeypatch.setattr(acp, "CANCEL_GRACE", 0.15)
+    steering_peer(host, f"end = {end!r}\n" + """
+req = get()
+put({"type":"text","text":"started"})
+assert get() == {"type":"cancel","turn":1}
+if end == "unresponsive":
+    time.sleep(30)
+elif end == "wrong-turn":
+    put({"type":"end","reason":"cancelled","turn":2})
+    time.sleep(30)
+""")
+    sid = host.open()
+    first = host.prompt(sid, "start")
+    while host.get().get("method") != "session/update":
+        pass
+    host.send("session/cancel", {"sessionId": sid}, notify=True)
+    assert host.recv(first)["result"] == {"stopReason": "cancelled"}
+    assert host.bridge.session is None
+    assert "error" in host.recv(host.prompt(sid, "follow-up"))
+    frames = [json.loads(line) for line in host.log.read_text().splitlines()]
+    assert [f["text"] for f in frames if f["type"] == "prompt"] == ["start"]
+
+
+def test_steer_before_a_prompt_is_sent_does_not_send_or_replay_it(host, monkeypatch):
+    steering_peer(host, """
+req = get()
+assert req == {"type":"prompt","turn":1,"text":"show me the preview"}
+put({"type":"end","reason":"end_turn","turn":1})
+assert get() == {"type":"close"}
+""")
+    sid = host.open()
+    entered, proceed = threading.Event(), threading.Event()
+    normalize = acp.prompt_text
+
+    def hold(*args):
+        entered.set()
+        assert proceed.wait(3)
+        return normalize(*args)
+
+    monkeypatch.setattr(acp, "prompt_text", hold)
+    first = host.prompt(sid, "do not forward")
+    assert entered.wait(3)
+    host.send("session/cancel", {"sessionId": sid}, notify=True)
+    proceed.set()
+    assert host.recv(first)["result"] == {"stopReason": "cancelled"}
+    assert host.recv(host.prompt(sid, "show me the preview"))["result"] == {"stopReason": "end_turn"}
+    assert host.recv(host.send("session/close", {"sessionId": sid}))["result"] == {}
+    assert "do not forward" not in host.log.read_text()
+
+
+def test_steer_interrupts_local_test_before_followup(tmp_path, monkeypatch):
+    host = Harness(tmp_path, test="pytest")
+    steering_peer(host, """
+assert get()["turn"] == 1
+put({"type":"request","op":"test","id":1})
+assert get() == {"type":"cancel","turn":1}
+assert "error" in get()
+put({"type":"end","reason":"cancelled","turn":1})
+assert get()["turn"] == 2
+put({"type":"end","reason":"end_turn","turn":2})
+assert get() == {"type":"close"}
+""")
+    started = threading.Event()
+    child = []
+    spawn = subprocess.Popen
+
+    def run_client_test(command, **kwargs):
+        if command[0] != "/usr/bin/sandbox-exec":
+            return spawn(command, **kwargs)
+        proc = spawn([sys.executable, "-c", "import time;time.sleep(30)"], **kwargs)
+        child.append(proc)
+        started.set()
+        return proc
+
+    monkeypatch.setattr(subprocess, "Popen", run_client_test)
+    original_which = workspace_tools.shutil.which
+    monkeypatch.setattr(workspace_tools.shutil, "which", lambda cmd, **kwargs:
+                        sys.executable if cmd == "pytest" else original_which(cmd, **kwargs))
+    try:
+        sid = host.open()
+        first = host.prompt(sid, "test")
+        while True:
+            msg = host.get()
+            if msg.get("method") == "session/request_permission":
+                break
+        host.bridge.handle({"jsonrpc": "2.0", "id": msg["id"], "result": {
+            "outcome": {"outcome": "selected", "optionId": "allow"}}})
+        assert started.wait(3)
+        host.send("session/cancel", {"sessionId": sid}, notify=True)
+        assert host.recv(first)["result"] == {"stopReason": "cancelled"}
+        assert child[0].poll() == -signal.SIGKILL
+        assert host.recv(host.prompt(sid, "follow-up"))["result"] == {"stopReason": "end_turn"}
+    finally:
+        host.close()
+
+
+def test_session_close_during_steer_releases_slot_without_waiting_for_ack(host):
+    steering_peer(host, """
+assert get()["turn"] == 1
+put({"type":"text","text":"running"})
+assert get() == {"type":"cancel","turn":1}
+time.sleep(30)
+""")
+    sid = host.open()
+    proc = host.bridge.session.process
+    first = host.prompt(sid, "start")
+    while host.get().get("method") != "session/update":
+        pass
+    host.send("session/cancel", {"sessionId": sid}, notify=True)
+    assert host.recv(host.send("session/close", {"sessionId": sid}))["result"] == {}
+    assert host.recv(first)["result"] == {"stopReason": "cancelled"}
+    assert proc.poll() is not None and host.bridge.session is None
+
+
 def test_parse_errors_and_shutdown_without_initialize():
     sink = Sink()
     bridge = acp.Bridge([], {}, editor, workspace_tools, project_files, "/", None, None,
