@@ -55,7 +55,33 @@ PROMPT_IDLE_SECONDS = 900
 PROXY_IDLE_SECONDS = 180
 CANCEL_WAKE = object()
 CURRENT_TURN = object()
-MCP_TOOLS = {"list_project": "list", "make_project_directory": "mkdir", "test_project": "test"}
+MCP_TOOLS = {
+    "list_project": "list", "make_project_directory": "mkdir", "test_project": "test",
+    "run_local_command": "shell", "publish_project": "publish",
+}
+SHELL_COMMAND_BYTES = 16 * 1024
+SHELL_OUTPUT_BYTES = 32 * 1024
+PUBLISH_FIELDS = {"title": 256, "body": 32 * 1024, "base": 255}
+# Native agents may cache the MCP catalog at startup, before any user turn.
+# Discovery is static; Device.request checks the current turn before dispatch.
+SHELL_TOOL = workspace_tools.tool(
+    "run_local_command",
+    "Run a shell command in the connected computer's selected project when locally enabled.",
+    {"command": "Noninteractive project command."}, ["command"],
+)
+PUBLISH_TOOL = {
+    "name": "publish_project",
+    "description": "Push the current branch or create a review on the locally configured remote.",
+    "inputSchema": {
+        "type": "object", "additionalProperties": False, "required": ["action"],
+        "properties": {
+            "action": {"type": "string", "enum": ["push", "create_review"]},
+            "title": {"type": "string", "description": "Optional review title."},
+            "body": {"type": "string", "description": "Optional review description."},
+            "base": {"type": "string", "description": "Optional review base branch."},
+        },
+    },
+}
 GUIDE = (
     "You are the user's interactive CCFleet project editor. The project is on the "
     "connecting computer. Use client_view_file, client_edit_file and client_create_file "
@@ -66,6 +92,15 @@ GUIDE = (
     "The slot's "
     "filesystem, shell and terminal are outside this project. If a client operation fails "
     "or the user declines it, explain why and wait for the user's next instruction.\n\n"
+)
+PROJECT_SHELL_GUIDE = (
+    "For this turn, this project's owner has enabled local commands. Use call_mcp_tool with "
+    "ServerName=ccfleetlocal, ToolName=run_local_command and Arguments containing command "
+    "for Git, builds and tests in the connecting computer's project. The command sandbox "
+    "can access the selected checkout and has no network or host credentials. For a push "
+    "or a GitHub pull request or GitLab merge request, use ToolName=publish_project with "
+    "Arguments containing action=push or action=create_review. For create_review, title, "
+    "body and base are optional. The client selects the authorized repository.\n\n"
 )
 
 
@@ -141,6 +176,7 @@ class Device:
         self.agent = None
         self.turn_key = None
         self.turn_id = None
+        self.project_shell_turn = None
         self.cancelled_turn = None
         self.cancelled_at = 0.0
         self.resume_enabled = False
@@ -181,6 +217,7 @@ class Device:
                         self.cancelled_at = time.monotonic()
                         self.cancelled_turn = tag
                         if self.turn_id == tag:
+                            self.project_shell_turn = None
                             self.agent.active.clear()
                         self.agent.cancel_turn(tag)
                     continue
@@ -219,6 +256,7 @@ class Device:
 
     def abort(self):
         self.closed.set()
+        self.project_shell_turn = None
         with self.process_lock:
             self._kill()
         with contextlib.suppress(OSError):
@@ -242,15 +280,18 @@ class Device:
         with self.socket_lock:
             gemini_preview.send(self.output, msg)
 
-    def begin_turn(self, tag):
+    def begin_turn(self, tag, *, project_shell=False):
         self.turn_key = object()
         self.turn_id = tag
+        self.project_shell_turn = self.turn_key if project_shell else None
         self.agent.active.set()
         if tag is not None and self.cancelled_turn == tag:
+            self.project_shell_turn = None
             self.agent.active.clear()
 
     def finish_turn(self):
         self.agent.active.clear()
+        self.project_shell_turn = None
         # Drain a previously issued MCP callback before releasing the wire for the next turn.
         with self.callback_lock:
             self.turn_key = self.turn_id = None
@@ -261,6 +302,10 @@ class Device:
         with self.callback_lock:
             if turn is None or self.turn_key is not turn or not self.agent.active.is_set():
                 raise ValueError("no active turn")
+            if op in ("shell", "publish") and (
+                self.project_shell_turn is not turn or self.closed.is_set() or not self.authorized()
+            ):
+                raise ValueError("project commands are not enabled for this turn")
             self.next_id += 1
             self.send({"type": "request", "id": self.next_id, "op": op, **fields})
             reply = self.receive(600)
@@ -292,8 +337,22 @@ def listing_path(path, project):
     return "." if relative == "." else project_files._path(relative)
 
 
+def _bounded_parameter(value, size):
+    if "\x00" in text_value(value, size):
+        raise ValueError("invalid project tool parameter")
+    return value
+
+
+def _command_result(data):
+    if (not isinstance(data, dict) or set(data) != {"exit", "output"}
+            or type(data["exit"]) is not int):
+        raise ValueError("invalid project command response")
+    text_value(data["output"], SHELL_OUTPUT_BYTES)
+    return data
+
+
 def mcp_request(device, msg, project=None, *, turn=CURRENT_TURN):
-    """Only the selected MacBook project exposes these three tools."""
+    """Only operations on the connecting computer are exposed to the Google session."""
     if msg.get("jsonrpc") != "2.0" or "id" not in msg or "method" not in msg:
         return None
     method = msg["method"]
@@ -314,7 +373,9 @@ def mcp_request(device, msg, project=None, *, turn=CURRENT_TURN):
             "capabilities": {"tools": {}},
         }
     elif method == "tools/list":
-        result = {"tools": [t for t in workspace_tools.TOOLS if t["name"] in MCP_TOOLS]}
+        result = {"tools": [
+            *(t for t in workspace_tools.TOOLS if t["name"] in MCP_TOOLS), SHELL_TOOL, PUBLISH_TOOL
+        ]}
     elif method == "ping":
         result = {}
     elif method in ("resources/list", "resources/templates/list", "prompts/list"):
@@ -328,9 +389,27 @@ def mcp_request(device, msg, project=None, *, turn=CURRENT_TURN):
         try:
             name = params.get("name")
             args = params.get("arguments", {})
-            if name not in MCP_TOOLS or not isinstance(args, dict) or args.keys() - {"path"}:
+            if name not in MCP_TOOLS or not isinstance(args, dict):
                 raise ValueError("unsupported operation")
-            if name == "test_project":
+            if name == "run_local_command":
+                if set(args) != {"command"}:
+                    raise ValueError("expected a project command")
+                command = _bounded_parameter(args["command"], SHELL_COMMAND_BYTES)
+                if not command.strip():
+                    raise ValueError("empty project command")
+                data = _command_result(request("shell", command=command))
+            elif name == "publish_project":
+                action = args.get("action")
+                if (action not in ("push", "create_review")
+                        or args.keys() - {"action", *PUBLISH_FIELDS}
+                        or (action == "push" and set(args) != {"action"})):
+                    raise ValueError("unsupported publish request")
+                for field in args.keys() & PUBLISH_FIELDS.keys():
+                    _bounded_parameter(args[field], PUBLISH_FIELDS[field])
+                data = _command_result(request("publish", request=args))
+            elif args.keys() - {"path"}:
+                raise ValueError("unsupported operation")
+            elif name == "test_project":
                 if args:
                     raise ValueError("custom test commands are not supported")
                 data = request("test")
@@ -565,8 +644,9 @@ class Agent:
         if self.active.is_set() and isinstance(tool, dict):
             mcp = tool.get("_meta", {}).get("mcp", {})
             if mcp.get("server") == MCP_NAME and mcp.get("tool") in MCP_TOOLS:
-                # Local writes and tests are independently approved again on the client.
-                approved = True
+                # The connecting client independently authorizes every tool operation.
+                approved = (MCP_TOOLS[mcp["tool"]] not in ("shell", "publish")
+                            or self.device.project_shell_turn is not None)
             elif tool.get("kind") == "edit" and tool.get("title") in (
                 "Run client_edit_file?",
                 "Run client_create_file?",
@@ -918,7 +998,8 @@ try:
     tool = json.load(sys.stdin)["toolCall"]
     name = tool["name"]
     allowed = {"client_view_file", "client_create_file", "client_edit_file"}
-    mcp = {"list_project", "make_project_directory", "test_project"}
+    mcp = {"list_project", "make_project_directory", "test_project",
+           "run_local_command", "publish_project"}
     permitted = name in allowed
     if name == "call_mcp_tool" or name in mcp:
         args = tool.get("args", {})
@@ -930,6 +1011,22 @@ except (ValueError, AttributeError, KeyError, TypeError):
 print(json.dumps({"decision": "allow" if permitted else "deny",
                   "reason": "This session uses the connected computer's editor tools."}))
 """
+
+
+def install_tool_hook(profile):
+    # An exclusively held profile can resume on a newer worker with an updated hook.
+    # Replace the leaf atomically; never write through a link in restored profile data.
+    cfg = profile / ".gemini/config"
+    sandbox = profile.parent
+    expected = sandbox.parent.resolve(strict=True) / sandbox.name / "home/.gemini/config"
+    if cfg.resolve(strict=True) != expected:
+        raise EditorError(gemini_recovery.NO_SESSION)
+    hook = cfg / "editor-policy.py"
+    with tempfile.TemporaryDirectory(dir=cfg) as tmp:
+        staged = Path(tmp) / hook.name
+        staged.write_text(TOOL_POLICY)
+        os.replace(staged, hook)
+    return hook
 
 
 def session_profile(home, session):
@@ -944,8 +1041,7 @@ def session_profile(home, session):
     acp = cfg.parent / "antigravity-acp"
     acp.mkdir(mode=0o700)
     (acp / "settings.json").write_text(json.dumps({"auth": {"type": "oauth-personal"}}))
-    hook = cfg / "editor-policy.py"
-    hook.write_text(TOOL_POLICY)
+    hook = install_tool_hook(profile)
     command = shlex.join(["/usr/bin/python3", "-I", "-B", str(hook)])
     hooks = {
         "ccfleet-editor": {
@@ -960,7 +1056,7 @@ def session_profile(home, session):
 def interact(agent, device, lease=None):
     device.agent = agent
     ready = {"type": "ready", "model": agent.model, "models": agent.models,
-             "capabilities": {"cancelTurn": True}}
+             "capabilities": {"cancelTurn": True, "projectShell": True}}
     if lease is not None and agent.supports_resume:
         device.resume_token = lease.token
         lease.sid, lease.model = agent.sid, agent.model
@@ -987,20 +1083,24 @@ def interact(agent, device, lease=None):
             else:
                 device.send({"type": "model", "model": agent.model})
             continue
-        if (msg.get("type") != "prompt"
-                or set(msg) not in ({"type", "text"}, {"type", "text", "turn"})):
+        if (msg.get("type") != "prompt" or "text" not in msg
+                or msg.keys() - {"type", "text", "turn", "projectShell"}
+                or ("projectShell" in msg and msg["projectShell"] is not True)):
             raise EditorError("The workspace sent an unexpected message.")
         prompt = text_value(msg["text"], 65536)
         if not prompt.strip():
             raise EditorError("Enter a project request to start a turn.")
         tag = msg.get("turn")
-        device.begin_turn(tag)
+        project_shell = msg.get("projectShell") is True
+        device.begin_turn(tag, project_shell=project_shell)
         try:
             response = agent.rpc(
                 "session/prompt",
                 {
                     "sessionId": agent.sid,
-                    "prompt": [{"type": "text", "text": GUIDE + prompt}],
+                    "prompt": [{"type": "text",
+                                "text": GUIDE + (PROJECT_SHELL_GUIDE if project_shell else "")
+                                + prompt}],
                 },
                 timeout=PROMPT_IDLE_SECONDS,
                 turn=tag,
@@ -1025,6 +1125,7 @@ def interact(agent, device, lease=None):
 def run_editor(home, device, binary, session, lease=None):
     if lease is not None and lease.state:
         profile = session / "home"
+        install_tool_hook(profile)
         # The prior worker has stopped; remove only its socket before binding the new MCP server.
         path = session / "m.sock"
         if path.exists():

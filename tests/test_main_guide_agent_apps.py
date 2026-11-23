@@ -154,3 +154,24 @@ def test_account_and_project_guides_explain_gemini_recovery(language, window, fr
     for source, section in ((guide, apps), (account, account.find("details")[0])):
         targets = [bilingual.route_target(link.attrs["href"]) for link in source.inside(section, "a")]
         assert any(target and target[0] == "/docs/guide#gemini-recovery" for target in targets)
+
+
+@pytest.mark.parametrize("language,phrases", [
+    ("en", ("offline", "standalone clone", "GitHub.com", "GitLab.com", "exact local commit")),
+    ("zh", ("离线", "独立", "GitHub.com", "GitLab.com", "当前本地提交")),
+])
+def test_gemini_project_access_setup_links_and_commands(language, phrases):
+    from ccfleetd import gemini_setup_ui
+
+    guide = Flow(rendered(language))
+    heading, = guide.find("h3", id="gemini-project-access")
+    assert heading.text
+    t3, = guide.find("section", id="t3-gemini")
+    detail = normalized(t3.text)
+    assert all(s in detail for s in ("0.2.23", "ENABLE", "--full-access", "--publish-to",
+                                     "--revoke-full-access", "gh", "glab", *phrases))
+    apps, = guide.find("section", id="agent-apps")
+    account = Flow(bilingual.project_html(gemini_setup_ui.t3_setup(), language, "/account/gemini"))
+    for source, section in ((guide, apps), (account, account.find("details")[0])):
+        targets = [bilingual.route_target(link.attrs["href"]) for link in source.inside(section, "a")]
+        assert any(t and t[0] == "/docs/guide#gemini-project-access" for t in targets)
