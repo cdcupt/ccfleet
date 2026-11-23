@@ -27,10 +27,12 @@ ROWS = (
      (("Pi", "https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/providers.md"),
       ("Google", "https://antigravity.google/docs/faq"))),
     ("Orca · Herdr",
-     ("Set the Claude executable to your Fleet launcher. See the settings below.",
-      "将 Claude 可执行文件设为 Fleet 启动器，具体设置见下方。"),
-     ("We have no verified Antigravity subscription integration for either app.",
-      "这两款应用均无经我们验证的 Antigravity 订阅接入。"),
+     ("Run ccfleet claude in a local project terminal, or use a fixed-slot launcher.",
+      "在本地项目终端运行 ccfleet claude，也可使用固定槽位启动器。"),
+     ("Run ccfleet gemini using an Orca Quick Command or a Herdr desktop program. "
+      "This opens the CCFleet project terminal and uses the Google sign-in on your slot.",
+      "通过 Orca 的 Quick Command 或 Herdr 桌面版的程序条目运行 ccfleet gemini，"
+      "即可在项目终端使用槽位上的 Google 登录。"),
      (("CCFleet", "#agent-apps"),)),
     ("VS Code",
      ("Install Anthropic’s Claude Code extension and sign in to Claude.",

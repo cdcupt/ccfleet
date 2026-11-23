@@ -1,5 +1,6 @@
 """The current gateway guide teaches one clear flow in separate language pages."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -277,3 +278,19 @@ def test_gemini_subscription_guide_separates_pairing_from_the_t3_provider(langua
     assert {"ccfleet", "gemini", "--acp", "ccfleet gemini"} <= set(page.codes)
     assert "Local ACP command" in page.text and "Supervised" in page.text
     assert f"https://ccfleet.io/{language}/account/gemini#subscription" in page.links
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_workbench_presets_match_the_localized_setup(language):
+    repo = GUIDE.parents[1]
+    preset = json.loads((repo / "integrations/herdr/programs.json").read_text())
+    assert {key: entry["run"] for key, entry in preset["programs"].items()} == {
+        "ccfleet-claude": ["ccfleet", "claude"], "ccfleet-gemini": ["ccfleet", "gemini"],
+    }
+    name = "docs/platform-comparison.html"
+    projected = bilingual.project_html((repo / name).read_text(), language, "/docs/library/" + name)
+    doc = Document(projected)
+    assert "orca-herdr" in doc.ids and "Settings → Quick Commands" in doc.text
+    example, = [block for block in doc.pre_codes if '"ccfleet-gemini"' in block]
+    assert json.loads(example) == preset
+    assert any(link.endswith("/integrations/herdr/programs.json") for link in doc.links)

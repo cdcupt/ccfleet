@@ -1,0 +1,18 @@
+{
+  "programs": {
+    "ccfleet-claude": {
+      "name": "CCFleet Claude",
+      "run": [
+        "ccfleet",
+        "claude"
+      ]
+    },
+    "ccfleet-gemini": {
+      "name": "CCFleet Gemini",
+      "run": [
+        "ccfleet",
+        "gemini"
+      ]
+    }
+  }
+}

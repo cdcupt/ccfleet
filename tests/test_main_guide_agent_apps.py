@@ -54,7 +54,11 @@ def test_each_app_has_configuration_on_the_main_page_not_only_a_library_link(lan
     assert [flow.inside(card, "h3")[0].text for card in cards] == ["Orca", "Herdr", "T3 Code"]
     assert all(card.has_class("connection-choice") for card in cards)
     assert RECIPE in page.pre_codes
-    assert '"run": ["/absolute/path/from-the-command"]' in page.pre_codes
+    assert any("integrations/herdr/programs.json" in link for link in page.links)
+    for card in cards[:2]:
+        assert "CCFleet Gemini" in card.text and "CCFleet Claude" in card.text
+    assert "Quick Commands" in cards[0].text and "ccfleet gemini" in cards[0].text
+    assert "ccfleet pair gemini" in section.text
     assert all(text in cards[0].text for text in ("Settings → Agents", "Command", "Arguments"))
     assert all(text in cards[1].text for text in ("programs.json", "run"))
     assert all(text in cards[2].text for text in (
@@ -83,8 +87,8 @@ def test_main_guide_preserves_account_and_verification_boundaries(language, requ
 
 
 @pytest.mark.parametrize("language,heading", [
-    ("en", "Use Claude in Orca, Herdr or T3 Code"),
-    ("zh", "在 Orca、Herdr 或 T3 Code 中使用 Claude"),
+    ("en", "Use Claude and Gemini in Orca, Herdr or T3 Code"),
+    ("zh", "在 Orca、Herdr 或 T3 Code 中使用 Claude 和 Gemini"),
 ])
 def test_localized_public_guide_serves_the_app_setup(one_site, language, heading):
     code, body = one_site(f"/{language}/docs/guide")
