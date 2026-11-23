@@ -1509,7 +1509,7 @@ def _guide_navigation() -> str:
              ("model-connections", "Sticky & priority", "会话保持与优先级"),
              ("t3-gemini", "Gemini in T3 Code", "在 T3 Code 中使用 Gemini"),
              ("agent-compatibility", "Claude & Gemini by tool", "各工具订阅支持"),
-             ("agent-apps", "Claude in agent apps", "在代理应用中使用 Claude"),
+             ("agent-apps", "Orca, Herdr and T3", "Orca、Herdr 与 T3"),
              ("local-work", "Files & conversations", "文件与会话"),
              ("slot-care", "Slot care", "管理槽位"))
 
@@ -1526,19 +1526,28 @@ def _agent_app_guide() -> str:
     return (
         '<section class="card" id="agent-apps" aria-labelledby="agent-apps-title">'
         '<h2 id="agent-apps-title">'
-        + label("Use Claude in Orca, Herdr or T3 Code", "在 Orca、Herdr 或 T3 Code 中使用 Claude",
-                inline=True)
+        + label("Use Claude and Gemini in Orca, Herdr or T3 Code",
+                "在 Orca、Herdr 或 T3 Code 中使用 Claude 和 Gemini", inline=True)
         + '</h2>'
         + bi(
-            '<p>Use the app’s <strong>Claude</strong> integration with Fleet 0.2.9 or later. '
-            'On the macOS or Linux machine that actually runs the agent—including a remote '
-            'app backend—finish <a href="#setup">Fleet setup</a> first and choose a '
-            'Claude-backed slot. Keep original Claude Code installed.</p>',
-            '<p>使用应用的 <strong>Claude</strong> 集成，Fleet 客户端需为 0.2.9 或更新版本。'
-            '在实际运行代理的 macOS 或 Linux 主机上（也包括远程应用后端），先完成'
-            '<a href="#setup">Fleet 配置</a>，并选择使用 Claude 账号的槽位。'
-            '请保留原版 Claude Code。</p>',
+            '<p>Open the project on the MacBook that holds your files. In Orca and Herdr '
+            'desktop you can run <code>ccfleet claude</code> and <code>ccfleet gemini</code> '
+            'in project terminals. Gemini uses the personal Antigravity subscription on your '
+            'private Mac slot. Pair this Mac once with <code>ccfleet pair gemini</code> '
+            'using your <a href="/account/gemini#subscription">saved setup code</a>. '
+            'Local edits and enabled test runs ask for approval in the Gemini terminal.</p>',
+            '<p>在保存项目文件的 MacBook 上打开项目。在 Orca 和 Herdr 桌面应用的项目终端中，'
+            '可以运行 <code>ccfleet claude</code> 和 <code>ccfleet gemini</code>。Gemini 使用'
+            '专属 Mac 槽位上的 Antigravity 个人订阅。用<a href="/account/gemini#subscription">'
+            '已保存的配对码</a>运行 <code>ccfleet pair gemini</code>，每台 Mac 配对一次。'
+            '修改本地文件和运行已启用的测试前，Gemini 会在终端中请求确认。</p>',
         )
+        + bi('<p>For a fixed-slot Claude launcher, finish <a href="#setup">Fleet setup</a>, '
+             'select a Claude-backed slot and keep original Claude Code installed. The launcher '
+             'works with Fleet 0.2.9 or later on macOS and Linux.</p>',
+             '<p>要使用绑定槽位的 Claude 启动器，请先完成 <a href="#setup">Fleet 配置</a>，'
+             '选择 Claude 槽位并保留原版 Claude Code。启动器支持 macOS 和 Linux，'
+             '需要 Fleet 0.2.9 或更新版本。</p>')
         + '<pre><code>ccfleet update\nccfleet launcher create daily-claude --slot SLOT</code></pre>'
         + bi(
             '<p>Replace <code>SLOT</code> with your slot’s current name or ID. The command '
@@ -1553,34 +1562,59 @@ def _agent_app_guide() -> str:
         )
         + '<div class="connection-choices"><article class="connection-choice"><h3>Orca</h3>'
         + bi(
-            '<p>Open <strong>Settings → Agents</strong>. Set Claude’s binary path or '
-            '<strong>Command</strong> to the printed launcher path. Keep launch options in '
-            '<strong>Arguments</strong>. The terminal and structured chat share '
-            'these settings.</p>',
-            '<p>打开 <strong>Settings → Agents（设置 → 代理）</strong>，将 Claude 的程序路径或 '
-            '<strong>Command</strong> 设为输出的启动器路径。启动选项仍放在 '
-            '<strong>Arguments</strong> 中；终端和结构化聊天共用这些设置。</p>',
+            '<p>In <strong>Settings → Quick Commands</strong>, add two commands of type '
+            '<strong>Terminal</strong>. Enable <strong>Append Enter</strong> to run on selection. '
+            'Name one <strong>CCFleet Claude</strong> and enter <code>ccfleet claude</code>. '
+            'Name the other <strong>CCFleet Gemini</strong> and enter <code>ccfleet gemini</code>. '
+            'Choose Global to reuse them across projects. Click Quick Commands in your local '
+            'worktree’s tab bar to launch the selected agent in a fresh terminal.</p>',
+            '<p>在 <strong>Settings → Quick Commands</strong> 新增两条 <strong>Terminal</strong>'
+            ' 命令。启用 <strong>Append Enter</strong> 可在选择后直接运行。第一条命名为 '
+            '<strong>CCFleet Claude</strong>，填写 <code>ccfleet claude</code>。第二条命名为 '
+            '<strong>CCFleet Gemini</strong>，填写 <code>ccfleet gemini</code>。选择 Global '
+            '即可跨项目使用。在本地工作树的标签栏点击 Quick Commands，所选代理会在新终端打开。</p>',
         )
+        + bi('<p>For Claude in Orca’s agent UI, open <strong>Settings → Agents</strong>. '
+             'Set Claude’s <strong>Command</strong> to the fixed-slot launcher path printed '
+             'above. Put any separate options in <strong>Arguments</strong>.</p>',
+             '<p>要在 Orca 的代理界面中使用 Claude，请打开 <strong>Settings → Agents</strong>，'
+             '将 Claude 的 <strong>Command</strong> 设为上面输出的固定槽位启动器路径。'
+             '额外选项填入 <strong>Arguments</strong>。</p>')
         + '</article><article class="connection-choice"><h3>Herdr</h3>'
         + bi(
-            '<p>In the Herdr app, add a separate Fleet Claude entry to '
-            '<code>programs.json</code>. Put the printed absolute path in its '
-            '<code>run</code> array, for example:</p>',
-            '<p>在 Herdr 应用的 <code>programs.json</code> 中新增一个独立的 Fleet Claude 项，'
-            '将输出的绝对路径放入它的 <code>run</code> 数组，例如：</p>',
+            '<p>Use the <a href="https://github.com/cdcupt/ccfleet/blob/main/integrations/herdr/programs.json">'
+            'two-program preset</a> for Herdr desktop. In '
+            '<code>~/.config/herdr-app/programs.json</code>, add its two entries to '
+            '<code>programs</code>. If the file is new, use the full preset. Open the local '
+            'project and choose <strong>CCFleet Claude</strong> or <strong>CCFleet Gemini</strong> '
+            'from the agent menu. Each opens in its own terminal.</p>',
+            '<p>使用 Herdr 桌面版的<a href="https://github.com/cdcupt/ccfleet/blob/main/integrations/herdr/programs.json">'
+            '双代理配置</a>。在 <code>~/.config/herdr-app/programs.json</code> 的 '
+            '<code>programs</code> 中添加这两个条目；如果是新文件，可直接使用完整配置。'
+            '打开本地项目，在代理菜单选择 <strong>CCFleet Claude</strong> 或 '
+            '<strong>CCFleet Gemini</strong>，即可在独立终端启动。</p>',
         )
-        + '<pre><code>"run": ["/absolute/path/from-the-command"]</code></pre>'
-        + bi('<p>Use an executable path, not a shell alias.</p>',
-             '<p>使用可执行文件路径，不要使用 shell 别名。</p>')
+        + bi('<p>If Herdr cannot find <code>ccfleet</code>, use the absolute path printed by '
+             '<code>command -v ccfleet</code> as the first item in each <code>run</code> array. '
+             'To pin Claude to a slot, use just its launcher path for that program.</p>',
+             '<p>如果 Herdr 找不到 <code>ccfleet</code>，将两个条目的 <code>run</code> 数组首项'
+             '改为 <code>command -v ccfleet</code> 输出的绝对路径。要让 Claude 始终使用指定槽位，'
+             '将该条目的数组设为只包含启动器路径。</p>')
+        + bi('<p><a href="/docs/library/docs/platform-comparison.html#orca-herdr">'
+             'View both terminal commands and the complete Herdr JSON example</a>.</p>',
+             '<p><a href="/docs/library/docs/platform-comparison.html#orca-herdr">'
+             '查看两条终端命令及完整的 Herdr JSON 示例</a>。</p>')
         + '</article><article class="connection-choice"><h3>T3 Code</h3>'
         + bi(
             '<p>In <strong>Settings → Providers</strong>, add a Claude instance and set '
-            '<strong>Binary path</strong> to the launcher. Add the environment variable '
+            '<strong>Binary path</strong> to the launcher. In the saved Claude instance, open '
+            '<strong>Environment → Variables → Add variable</strong>. Set '
             '<code>ANTHROPIC_BASE_URL</code> with value <code>https://ccfleet.io</code> so '
             'T3 recognizes the custom endpoint. Fleet supplies authentication from its '
             'private configuration.</p>',
             '<p>在 <strong>Settings → Providers（设置 → 服务商）</strong> 中新增 Claude 实例，'
-            '将 <strong>Binary path</strong> 设为启动器路径。添加环境变量 '
+            '将 <strong>Binary path</strong> 设为启动器路径。保存后打开该 Claude 实例的 '
+            '<strong>Environment → Variables → Add variable</strong>，设置 '
             '<code>ANTHROPIC_BASE_URL</code>，值为 <code>https://ccfleet.io</code>，'
             '让 T3 识别自定义接口。认证信息由 Fleet 从私有配置中提供。</p>',
         )
@@ -1600,22 +1634,26 @@ def _agent_app_guide() -> str:
             '<p class="callout">Codex keeps its own connection. The experimental Devin '
             'route does not support every request these apps make, including T3’s structured '
             'titles with an empty tool set. Herdr TUI is separate from the desktop app: '
-            'resume through the Fleet launcher, because automatic native restore may invoke '
+            'run either Fleet command in its local project pane. Resume Claude through the '
+            'Fleet launcher, because automatic native restore may invoke '
             '<code>claude --resume</code> directly. Manage hosted sign-in through Fleet and '
             'native Claude updates through its original executable or installer.</p>',
             '<p class="callout">Codex 仍使用自己的连接。Devin 实验路线不支持这些应用的所有请求，'
             '例如 T3 使用空工具集生成结构化标题的请求。Herdr TUI 与桌面应用是不同程序：'
-            '请通过 Fleet 启动器恢复会话，因为原生自动恢复可能直接调用 '
+            '可在项目窗格直接运行这两条命令。请通过 Fleet 启动器恢复 Claude 会话，'
+            '原生自动恢复可能调用 '
             '<code>claude --resume</code>。托管账号登录由 Fleet 管理，原版 Claude 更新则使用'
             '其原版可执行程序或安装器。</p>',
         )
         + bi(
-            '<p>Claude launcher, terminal and signed-client checks passed. Full Claude app/model '
+            '<p>Orca and Herdr launched the released CCFleet client in a local project. '
+            'Gemini file access and approval checks used a simulated slot. Full Claude app/model '
             'sessions remain unverified. Start with a small test session, including any '
             'automatic title or helper requests you use. '
             '<a href="/docs/library/docs/platform-comparison.html#agent-apps">'
             'Detailed app settings, compatibility limits and verification scope</a>.</p>',
-            '<p>Claude 启动器、终端和签名客户端检查已通过。完整的 Claude 应用／模型会话仍未验证。'
+            '<p>Orca 和 Herdr 已在本地项目中启动正式发布的 CCFleet 客户端。'
+            'Gemini 文件访问与审批检查使用模拟槽位。完整的 Claude 应用／模型会话仍未验证。'
             '请先进行一个小型测试会话，也检查自己会用到的自动标题或辅助请求。'
             '<a href="/docs/library/docs/platform-comparison.html#agent-apps">'
             '查看详细应用设置、兼容性限制与验证范围</a>。</p>',
