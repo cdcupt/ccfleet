@@ -1,3 +1,4 @@
+import contextlib
 import hashlib
 import os
 import runpy
@@ -404,8 +405,12 @@ def menu_session(editor, answers, frames, monkeypatch):
     replies = iter(frames)
     inputs = iter(answers)
     monkeypatch.setattr("builtins.input", lambda _: next(inputs))
-    channel = SimpleNamespace(send=sent.append, receive=lambda **_: next(replies))
-    ui.session(channel, editor)
+    channel = SimpleNamespace(send=sent.append, receive=lambda **_: next(replies),
+                              disconnected=lambda: False)
+    with contextlib.ExitStack() as stack:
+        connection = ui.TerminalSession(editor, lambda: contextlib.nullcontext(channel), stack)
+        ui.session(connection)
+        connection.channel.send({"type": "close"})
     assert next(inputs, None) is None
     assert next(replies, None) is None
     return sent

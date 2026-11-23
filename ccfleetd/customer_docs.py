@@ -1620,6 +1620,19 @@ def _agent_app_guide() -> str:
         )
         + '</article></div>'
         + bi(
+            '<p><strong>If Gemini disconnects in Orca or Herdr</strong>, keep the project '
+            'terminal open. With CCFleet 0.2.22 and a compatible slot, your next instruction '
+            'can resume the same conversation for up to five minutes after the disconnect. '
+            'Use <code>/reconnect</code> to check without sending a message. Review any partial '
+            'edits before continuing. Pending approvals expire. If the previous conversation '
+            'has expired, use <code>/reconnect</code> when prompted to start a fresh one.</p>',
+            '<p><strong>如果 Orca 或 Herdr 中的 Gemini 断线</strong>，请保持项目终端打开。'
+            '使用 CCFleet 0.2.22 和兼容的槽位时，断线后五分钟内发送下一条指令即可尝试恢复原对话。'
+            '输入 <code>/reconnect</code> 可检查连接，无需发送消息。继续前请查看已写入的更改。'
+            '之前的待批准操作已失效。若原对话已过期，可按提示输入 <code>/reconnect</code> '
+            '开始新对话。</p>',
+        )
+        + bi(
             '<p><strong>One launcher, one selected slot.</strong> Changing '
             '<code>ccfleet use</code> or the app’s native account/profile does not switch '
             'this launcher’s Fleet slot. Create and select another launcher for a different '

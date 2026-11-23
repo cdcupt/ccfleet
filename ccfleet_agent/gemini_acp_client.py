@@ -8,7 +8,6 @@ import hashlib
 import json
 import os
 import queue
-import re
 import secrets
 import select
 import signal
@@ -300,29 +299,13 @@ class Session:
             if self.cancelled.wait(delay):
                 raise EOFError
             delay = min(1.5, delay * 2)
-        current = ready.get("model")
-        if ready.get("type") != "ready" or not isinstance(current, str):
-            raise SessionRejected(INTERNAL_ERROR, BAD_READY)
-        models = ready.get("models", [current])
-        if (not isinstance(models, list) or not 1 <= len(models) <= 256
-                or any(not isinstance(m, str) or not self.host.editor.MODEL_ID.fullmatch(m)
-                       for m in models) or current not in models
-                or len(set(models)) != len(models)):
-            raise SessionRejected(INTERNAL_ERROR, BAD_READY)
-        capabilities = ready.get("capabilities")
-        can_resume = isinstance(capabilities, dict) and capabilities.get("resumeSession") is True
-        received = ready.get("resumeToken")
-        if can_resume and not (isinstance(received, str)
-                               and re.fullmatch("[0-9a-f]{64}", received)):
-            raise SessionRejected(INTERNAL_ERROR, BAD_READY)
-        if token is not None and (not can_resume or ready.get("resumed") is not True
-                                  or not secrets.compare_digest(token, received)):
-            raise SessionRejected(INTERNAL_ERROR, BAD_READY)
-        if token is None and ready.get("resumed") is True:
-            raise SessionRejected(INTERNAL_ERROR, BAD_READY)
-        self.can_cancel_turn = (isinstance(capabilities, dict)
-                                and capabilities.get("cancelTurn") is True)
-        self.offered_token = received if can_resume else None
+        try:
+            current, models, offered, tagged = self.host.editor.ready_session(ready, token)
+        except ValueError:
+            raise SessionRejected(INTERNAL_ERROR, BAD_READY) from None
+        self.can_cancel_turn = tagged
+        self.offered_token = offered
+        models = models or [current]
         if token is not None:
             # A restored conversation already contains a user's work. For new
             # conversations, opt in only upon the first real prompt, never discovery.
