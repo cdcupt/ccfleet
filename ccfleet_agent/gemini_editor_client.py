@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import select
 import signal
 import struct
@@ -56,21 +57,61 @@ def show_patch(path, before, after):
         print(terminal_text(line))
 
 
+class ApprovalInterrupted(EOFError):
+    """The connection ended while the user was deciding on a local action."""
+
+
+class SlotError(ValueError):
+    """A well-formed error frame from the paired slot."""
+
+
 class Editor:
     def __init__(self, project, tools, files, test=None, *, fleet_home=None):
         self.tools = tools
         private = tools.PrivateFolders(fleet_home or Path.home() / ".config" / "ccfleet")
         self.workspace = tools.Workspace(project, self._confirm_workspace, test, file_tools=files,
-                                         private_folders=private)
+                                         private_folders=private, cancelled=self.disconnected)
+        self.channel = None
         self.seen = {}
         self.approval = None
+
+    def disconnected(self):
+        return self.channel is not None and self.channel.disconnected()
+
+    def answer(self, question):
+        # Keep the tty in canonical mode so unfinished or pasted approval input
+        # can be flushed when the pinned SSH connection closes.
+        if self.channel is None or not sys.stdin.isatty():
+            return input(question)
+        fd = sys.stdin.fileno()
+        termios.tcflush(fd, termios.TCIFLUSH)
+        print(question, end="", flush=True)
+        while not self.disconnected():
+            if select.select([fd], [], [], 0.15)[0]:
+                answer = sys.stdin.readline()
+                if not answer:
+                    raise EOFError
+                if not self.disconnected():
+                    return answer.rstrip("\n")
+        termios.tcflush(fd, termios.TCIFLUSH)
+        print()
+        raise ApprovalInterrupted
+
+    def confirm(self, question):
+        if self.channel is None or not sys.stdin.isatty():
+            approved = confirm(question)
+        else:
+            approved = self.answer(question + " [y/N] ").strip().lower() in ("y", "yes")
+        if self.disconnected():
+            raise ApprovalInterrupted
+        return approved
 
     def _confirm_workspace(self, action, detail):
         if action == "Save file":
             # The immediately enclosing write verifies this approval and its content.
             return self.approval is not None and self.approval[0] == detail
         if action in ("Create directory", "Run local tests"):
-            return confirm(f"{action} on this Mac ({terminal_text(detail)})?")
+            return self.confirm(f"{action} on this Mac ({terminal_text(detail)})?")
         return False
 
     def _approved_edit(self, path, content):
@@ -82,7 +123,8 @@ class Editor:
         if expected != self.seen.get(path, "new"):
             raise ValueError("the file must be read again before editing")
         show_patch(path, current["text"] if current else "", content)
-        if not confirm(f"{'Edit' if current else 'Create'} {terminal_text(path)} on this Mac?"):
+        action = "Edit" if current else "Create"
+        if not self.confirm(f"{action} {terminal_text(path)} on this Mac?"):
             return False
         self.approval = (path, hashlib.sha256(content.encode("utf-8")).hexdigest(), expected)
         return True
@@ -128,7 +170,8 @@ class Editor:
         if self.workspace.command is None:
             raise ValueError("tests are disabled; the user can enable a runner with /test")
         if self.workspace.test_directory() is None:
-            folder = input("Which project subfolder should run the tests? (blank to skip) ").strip()
+            folder = self.answer("Which project subfolder should run the tests? "
+                                 "(blank to skip) ").strip()
             if not folder:
                 raise ValueError("local test folder was not selected")
             folder = str(Path(folder))
@@ -170,6 +213,13 @@ class Channel:
     def __init__(self, pipe):
         self.pipe = pipe
 
+    def disconnected(self):
+        if self.pipe.poll() is not None:
+            return True
+        poller = select.poll()
+        poller.register(self.pipe.stdout, select.POLLHUP | select.POLLERR)
+        return bool(poller.poll(0))
+
     def send(self, message):
         raw = json.dumps(message, ensure_ascii=False, allow_nan=False).encode("utf-8")
         if len(raw) > MAX_FRAME:
@@ -202,18 +252,28 @@ class Channel:
             raise ValueError("invalid Gemini editor message")
         if message.get("type") == "error":
             reason = message.get("message")
-            raise ValueError(terminal_text(reason[:2048]) if isinstance(reason, str)
+            raise SlotError(terminal_text(reason[:2048]) if isinstance(reason, str)
                              else "the Gemini slot could not complete this session")
         return message
 
 
-def turn(channel, editor, prompt):
-    channel.send({"type": "prompt", "text": prompt})
+def turn(channel, editor, prompt, *, number=None, progress=False):
+    request = {"type": "prompt", "text": prompt}
+    if number is not None:
+        request["turn"] = number
+    channel.send(request)
     ids = set()
     editor.approval = None
     while True:
         message = channel.receive()
         kind = message.get("type")
+        if kind == "progress" or kind == "end" and number is not None:
+            if type(message.get("turn")) is not int or message["turn"] != number:
+                raise ValueError("unexpected Gemini turn number")
+            if kind == "progress":
+                if not progress or set(message) != {"type", "turn"}:
+                    raise ValueError("unexpected Gemini progress frame")
+                continue
         if kind == "end" and isinstance(message.get("reason"), str):
             editor.approval = None
             reason = message["reason"]
@@ -230,12 +290,14 @@ def turn(channel, editor, prompt):
         if kind == "text" and isinstance(message.get("text"), str):
             print(terminal_text(message["text"]), end="", flush=True)
             continue
-        number = message.get("id")
-        if (kind != "request" or type(number) is not int or number <= 0
-                or number in ids or len(ids) >= 4096):
+        request_id = message.get("id")
+        if (kind != "request" or type(request_id) is not int or request_id <= 0
+                or request_id in ids or len(ids) >= 4096):
             raise ValueError("unexpected Gemini editor message")
-        ids.add(number)
-        reply = {"type": "response", "id": number}
+        ids.add(request_id)
+        reply = {"type": "response", "id": request_id}
+        if editor.disconnected():
+            raise EOFError
         try:
             reply["result"] = editor.handle(message)
         except (OSError, UnicodeError, subprocess.TimeoutExpired):
@@ -252,6 +314,7 @@ COMMAND_HELP = """Gemini commands
   /test                      Show the current test command
   /test <runner> [subfolder] Choose pytest, npm, go or cargo for local tests
   /test off                  Disable local tests
+  /reconnect                 Rejoin the previous conversation, or start fresh after expiry
   /exit or /quit             Close this session
 
 Type a message to talk to Gemini."""
@@ -293,21 +356,133 @@ def model_command(channel, current, models, choice):
     return active
 
 
-def session(channel, editor):
-    channel.send({"type": "open", "version": 1})
-    # A cold slot verifies the registry, downloads the agent and authenticates the session.
-    ready = channel.receive(timeout=420)
-    if ready.get("type") != "ready" or not isinstance(ready.get("model"), str):
+SLOT_BUSY = "Another Gemini editor is using this slot. Close it and reconnect."
+MISSING = "The previous Gemini session cannot be resumed."
+FRESH = "Send /reconnect to start a fresh Gemini conversation in this terminal."
+INTERRUPTED_ERRORS = {
+    "The Gemini editor session timed out. Reopen it to continue.",
+    "The Gemini slot timed out. Reopen the editor to continue.",
+    "The Google editor agent stopped on the slot.",
+    "The Google editor could not complete this request.",
+    "The Gemini editor is unavailable on the private Mac. Reopen it to try again.",
+}
+
+
+def ready_session(ready, token=None):
+    current = ready.get("model")
+    if (ready.get("type") != "ready" or not isinstance(current, str)
+            or not MODEL_ID.fullmatch(current)):
         raise ValueError("the private slot did not open a Gemini editor session")
-    current = ready["model"]
     models = ready.get("models")
-    if models is not None and (not isinstance(models, list) or current not in models
-                               or any(not isinstance(m, str) or not MODEL_ID.fullmatch(m)
-                                      for m in models) or len(set(models)) != len(models)):
-        raise ValueError("the private slot returned an invalid Gemini model list")
-    print(f"Gemini · {terminal_text(current)} · {terminal_text(str(editor.workspace.path))}")
+    if "models" in ready:
+        if (not isinstance(models, list) or not 1 <= len(models) <= 256 or current not in models
+                or any(not isinstance(m, str) or not MODEL_ID.fullmatch(m) for m in models)
+                or len(set(models)) != len(models)):
+            raise ValueError("the private slot returned an invalid Gemini model list")
+    caps = ready.get("capabilities")
+    caps = caps if isinstance(caps, dict) else {}
+    offered = None
+    if caps.get("resumeSession") is True:
+        offered = ready.get("resumeToken")
+        if not isinstance(offered, str) or not re.fullmatch(r"[0-9a-f]{64}", offered):
+            raise ValueError("invalid Gemini recovery capability")
+    if token is not None:
+        if (ready.get("resumed") is not True or offered is None
+                or not secrets.compare_digest(token, offered)):
+            raise ValueError("the slot did not confirm the previous Gemini session")
+    elif ready.get("resumed") is True:
+        raise ValueError("unexpected Gemini recovery reply")
+    return current, models, offered, caps.get("cancelTurn") is True
+
+
+class TerminalSession:
+    def __init__(self, editor, open_transport, stack):
+        self.editor = editor
+        self.open_transport = open_transport
+        self.stack = stack
+        self.channel = None
+        self.current = self.models = None
+        self.offered = self.token = None
+        self.tagged = False
+        self.number = 0
+
+    def detach(self):
+        self.channel = self.editor.channel = None
+        self.offered = None
+        self.editor.approval = None
+        self.editor.seen.clear()
+        self.stack.close()
+
+    def connect(self):
+        token = self.token
+        channel = self.stack.enter_context(self.open_transport())
+        message = {"type": "open", "version": 1} if token is None else {
+            "type": "resume", "version": 1, "resumeToken": token,
+        }
+        channel.send(message)
+        ready = channel.receive(timeout=420)
+        current, models, offered, tagged = ready_session(ready, token)
+        if token is not None:
+            if current != self.current:
+                raise ValueError("the restored session did not confirm the previous Gemini model")
+            channel.send({"type": "enableResume"})
+        self.current, self.models = current, models
+        self.tagged = tagged
+        self.channel, self.offered = channel, offered
+        self.editor.channel = channel
+
+    def reconnect(self, *, fresh):
+        if self.token is None and not fresh:
+            print(FRESH + " Your message was not sent.")
+            return False
+        deadline = time.monotonic() + 10
+        delay = 0.4
+        while True:
+            try:
+                self.connect()
+                break
+            except SlotError as exc:
+                self.detach()
+                # The prior worker may still be detaching. Admission was explicitly
+                # refused, so no new prompt has been sent or needs to be replayed.
+                if (self.token and str(exc) == SLOT_BUSY
+                        and time.monotonic() + delay <= deadline):
+                    time.sleep(delay)
+                    delay = min(delay * 2, 1.5)
+                    continue
+                if str(exc) == MISSING:
+                    self.token = None
+                    print(MISSING, FRESH)
+                else:
+                    print("The slot could not reconnect. Check slot access and try /reconnect.")
+                return False
+            except (EOFError, OSError, subprocess.TimeoutExpired):
+                self.detach()
+                print("Could not reach the slot. Try /reconnect. Your message was not sent.")
+                return False
+        if self.token:
+            print("Reconnected to the previous Gemini conversation.")
+        else:
+            print("Connected to a fresh Gemini conversation in this terminal.")
+        return True
+
+    def send_prompt(self, prompt):
+        if self.offered and not self.token:
+            self.token = self.offered
+            self.channel.send({"type": "enableResume"})
+        self.number += 1
+        turn(self.channel, self.editor, prompt, number=self.number if self.tagged else None,
+             progress=self.token is not None and self.tagged)
+
+
+def session(connection):
+    editor = connection.editor
+    connection.connect()
+    project = terminal_text(str(editor.workspace.path))
+    print(f"Gemini · {terminal_text(connection.current)} · {project}")
     print("Gemini reads requested project files through your slot. Edits and local tests "
           "ask for approval. Type /help for commands.")
+    stale_answer = False
     while True:
         try:
             prompt = input("\nYou › ").strip()
@@ -318,29 +493,61 @@ def session(channel, editor):
         parts = prompt.split(maxsplit=1)
         command = parts[0]
         argument = parts[1] if len(parts) == 2 else ""
+        if stale_answer:
+            stale_answer = False
+            if prompt.lower() in ("y", "yes", "n", "no"):
+                print("That approval expired. Enter a new instruction.")
+                continue
         if command in ("/exit", "/quit"):
             if argument:
                 print(f"Use {command} by itself to disconnect.")
                 continue
-            channel.send({"type": "close"})
             return
         if command == "/help":
             print(COMMAND_HELP)
-        elif command == "/model":
-            current = model_command(channel, current, models, argument)
-        elif command == "/test":
+            continue
+        if command == "/test":
             editor.test_command("/test " + argument)
-        elif re.fullmatch(r"/[a-zA-Z][a-zA-Z0-9_-]*", command):
-            print(f"Unknown command {command}. Type /help for the available commands.")
-        else:
+            continue
+        if command == "/reconnect" and argument:
+            print("Use /reconnect by itself.")
+            continue
+        if command not in ("/model", "/reconnect"):
+            if re.fullmatch(r"/[a-zA-Z][a-zA-Z0-9_-]*", command):
+                print(f"Unknown command {command}. Type /help for the available commands.")
+                continue
             if len(prompt.encode("utf-8")) > MAX_PROMPT:
                 print("The message is too long. Please shorten it.")
                 continue
-            turn(channel, editor, prompt)
+        if connection.channel is not None and editor.disconnected():
+            connection.detach()
+        if command == "/reconnect":
+            if connection.channel is None:
+                connection.reconnect(fresh=True)
+            else:
+                print("The Gemini connection is already open.")
+            continue
+        if connection.channel is None and not connection.reconnect(fresh=False):
+            continue
+        try:
+            if command == "/model":
+                connection.current = model_command(connection.channel, connection.current,
+                                                   connection.models, argument)
+            else:
+                connection.send_prompt(prompt)
+        except (EOFError, OSError, subprocess.TimeoutExpired, SlotError) as exc:
+            if isinstance(exc, SlotError) and str(exc) not in INTERRUPTED_ERRORS:
+                raise
+            stale_answer = isinstance(exc, ApprovalInterrupted)
+            connection.detach()
+            print("\nThe connection to Gemini was interrupted. The previous request may have "
+                  "partly completed and will not be replayed.")
+            print("Your next instruction will try to resume the conversation." if connection.token
+                  else FRESH)
 
 
-def run(project, command, environment, tools, files, test=None, *, fleet_home=None):
-    editor = Editor(project, tools, files, test, fleet_home=fleet_home)
+@contextlib.contextmanager
+def transport(command, environment):
     proc = None
     try:
         try:
@@ -348,14 +555,10 @@ def run(project, command, environment, tools, files, test=None, *, fleet_home=No
                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                     start_new_session=True)
         except OSError as exc:
-            raise ValueError("could not start the CCFleet connection; check the local "
-                             "OpenSSH installation") from exc
-        session(Channel(proc), editor)
-    except (EOFError, BrokenPipeError) as exc:
-        raise ValueError("the Gemini editor connection closed; check the private slot's "
-                         "editor service and Antigravity sign-in before reconnecting") from exc
+            raise OSError("could not start the CCFleet connection; check the local "
+                          "OpenSSH installation") from exc
+        yield Channel(proc)
     finally:
-        editor.workspace.close()
         if proc is not None:
             with contextlib.suppress(BrokenPipeError):
                 proc.stdin.close()
@@ -372,3 +575,23 @@ def run(project, command, environment, tools, files, test=None, *, fleet_home=No
                             os.killpg(proc.pid, signal.SIGKILL)
             proc.wait()
             proc.stdout.close()
+
+
+def run(project, command, environment, tools, files, test=None, *, fleet_home=None):
+    editor = Editor(project, tools, files, test, fleet_home=fleet_home)
+    try:
+        with contextlib.ExitStack() as stack:
+            connection = TerminalSession(editor, lambda: transport(command, environment), stack)
+            try:
+                session(connection)
+            finally:
+                if connection.channel is not None:
+                    with contextlib.suppress(OSError, ValueError):
+                        connection.channel.send({"type": "close"})
+    except EOFError as exc:
+        raise ValueError("the Gemini editor connection closed; check the private slot's "
+                         "editor service and Antigravity sign-in before reconnecting") from exc
+    except OSError as exc:
+        raise ValueError(str(exc)) from exc
+    finally:
+        editor.workspace.close()
