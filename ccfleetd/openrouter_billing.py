@@ -46,7 +46,7 @@ def hold_cents(body_size, max_tokens, rates):
     # Text-only requests. Include serialization, tool templates and model framing.
     prompt, completion = rates
     ceiling = ((body_size * 2 + 4096) * prompt + max_tokens * completion) / 1_000_000
-    return max(1, int((ceiling * MULTIPLIER * 100).to_integral_value(rounding=ROUND_CEILING)))
+    return int((ceiling * MULTIPLIER * 100).to_integral_value(rounding=ROUND_CEILING))
 
 
 class OpenRouterStore:
@@ -73,7 +73,8 @@ class OpenRouterStore:
         return row[0] if row else None
 
     def openrouter_reserve(self, owner, token, model, cents):
-        wallet.positive_cents(cents)
+        if type(cents) is not int or not 0 <= cents <= wallet.MAX_CENTS:
+            raise BillingError("Invalid OpenRouter credit reservation.")
         with self._write_txn() as db:
             if self.openrouter_principal(token) != owner or wallet_topups.spending_blocked(
                 db, owner

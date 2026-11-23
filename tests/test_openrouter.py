@@ -274,3 +274,14 @@ def test_rotated_key_cannot_submit_and_ambiguous_hold_needs_review(router):
         c.store.openrouter_void_unbilled(rid, "Synthetic provider evidence", 0)
     c.store.openrouter_void_unbilled(rid, "Synthetic provider evidence", time.time() + 1)
     assert c.store.wallet_balance("alice") == 3000
+
+def test_zero_priced_model_has_zero_hold_and_zero_fee(router, provider):
+    calls, replies = provider
+    router.service.models[MODELS[0]] = (Decimal(0), Decimal(0))
+    token = router.store.openrouter_key("alice")
+    replies.append((200, "application/json", b'{"type":"message","id":"gen-free","usage":{"cost":0}}'))
+    assert api(router, token, payload(MODELS[0]))[0] == 200
+    receipt = router.store.openrouter_receipts("alice")[0]
+    assert receipt["state"] == "settled" and receipt["hold_cents"] == 0
+    assert Decimal(receipt["fee_usd"]) == 0 and receipt["debit_cents"] == 0
+    assert calls[0][2]["provider"]["max_price"]["completion"] == 0
