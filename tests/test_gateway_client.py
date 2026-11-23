@@ -573,3 +573,54 @@ def test_native_picker_has_three_explicit_model_routes(client, monkeypatch, prov
         {"model": "fleet-gpt", "label": "GPT · API"},
         {"model": "fleet-gemini", "label": "Gemini · API"},
     ]}
+
+
+def test_openrouter_launch_uses_account_key_and_catalog_without_slot(client, monkeypatch):
+    token = "ccf_or_" + "a" * 43
+    ids = ["deepseek/deepseek-v4.1-flash", "deepseek/deepseek-v4-pro"]
+    monkeypatch.setenv("CCFLEET_OPENROUTER_TOKEN", token)
+    monkeypatch.setitem(client.scope, "load_config", lambda: pytest.fail("slot pairing read"))
+    def catalog(url, secret, method):
+        assert (url, secret, method) == ("https://ccfleet.io/openrouter/v1/models", token, "GET")
+        return {"data": [{"id": m} for m in ids]}
+    monkeypatch.setitem(client.scope, "api_json", catalog)
+    assert client.loaded["main"](["openrouter", "--check"]) == 0
+    assert not client.calls
+    assert client.loaded["main"](["openrouter", "--model", ids[1]]) == 0
+    command, kwargs, path, settings, mode = client.calls[0]
+    assert mode == 0o600 and not path.exists() and token not in command
+    assert "CCFLEET_OPENROUTER_TOKEN" not in kwargs["env"]
+    assert settings["env"]["ANTHROPIC_AUTH_TOKEN"] == token
+    assert settings["env"]["ANTHROPIC_API_KEY"] == ""
+    assert settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == ids[1]
+    assert [v["model"] for v in settings["modelPicker"]["options"]] == ids
+
+
+def test_openrouter_remembered_default_override_and_picker(client, monkeypatch, capsys):
+    saved, other, unused = "example/saved", "example/prior", "example/unused"
+    monkeypatch.setenv("CCFLEET_OPENROUTER_TOKEN", "ccf_or_" + "b" * 43)
+    rows = [{"id": m, "fleet_recent": m != unused} for m in (saved, other, unused)]
+    monkeypatch.setitem(client.scope, "api_json", lambda *a, **kw: {"data": rows})
+    main = client.loaded["main"]
+    assert main(["openrouter", "--check"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert "Default: " + saved in lines
+    assert "Recently used: " + saved + ", " + other in lines
+    assert not client.calls
+    assert main(["openrouter"]) == 0
+    assert main(["openrouter", "--model", unused]) == 0
+    for call, expected in zip(client.calls, (saved, unused)):
+        command, _, _, settings, _ = call
+        assert command[command.index("--model") + 1] == expected
+        options = settings["modelPicker"]["options"]
+        assert [o["model"] for o in options] == [saved, other, unused]
+        assert ["Recent" in o["label"] for o in options] == [True, True, False]
+
+
+def test_openrouter_owner_pricing_from_authenticated_catalog(client, monkeypatch, capsys):
+    monkeypatch.setenv("CCFLEET_OPENROUTER_TOKEN", "ccf_or_" + "c" * 43)
+    monkeypatch.setitem(client.scope, "api_json", lambda *a, **kw: {
+        "data": [{"id": "example/one"}], "fleet_billing": "admin_covered"})
+    assert client.loaded["main"](["openrouter"]) == 0
+    assert "Fleet covers" in capsys.readouterr().err
+    assert "Fleet $0" in client.calls[0][3]["modelPicker"]["options"][0]["label"]
