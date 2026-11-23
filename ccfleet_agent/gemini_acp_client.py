@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-VERSION = "0.2.22"
+VERSION = "0.2.23"
 # ACP reserves -32000 for sessions which require authentication.
 AUTH_REQUIRED = -32000
 INTERNAL_ERROR = -32603
@@ -203,6 +203,8 @@ class Session:
             )
         except (ValueError, OSError, RuntimeError, KeyError) as exc:
             raise invalid("The local workspace or test runner is unavailable.") from exc
+        self.commands = host.editor.ProjectCommands(
+            host.tools, host.files, self.workspace.path, host.fleet_home)
         self.resume_token = None
         self.offered_token = None
         self.reconnecting = False
@@ -304,6 +306,7 @@ class Session:
         except ValueError:
             raise SessionRejected(INTERNAL_ERROR, BAD_READY) from None
         self.can_cancel_turn = tagged
+        self.commands.connected(ready)
         self.offered_token = offered
         models = models or [current]
         if token is not None:
@@ -349,6 +352,7 @@ class Session:
 
     def detach(self):
         self._retire_channel(graceful=False)
+        self.commands.capable = False
         self.offered_token = None
         self.seen.clear()
         self.approved.clear()
@@ -522,28 +526,38 @@ class Session:
                 raise RpcError(INTERNAL_ERROR, "The Gemini slot declined that selection.")
         return self.config()
 
-    def permission(self, title, kind, location, content):
+    def permission(self, title, kind, location, content, *, automatic=False):
         if self.unavailable():
             return False
+        if automatic and (self.command_unavailable() or not self.commands.allowed()):
+            return False
         tool = {"toolCallId": secrets.token_urlsafe(16), "title": title, "kind": kind,
-                "status": "pending", "locations": [{"path": str(location)}], "content": content}
+                "status": "in_progress" if automatic else "pending",
+                "locations": [{"path": str(location)}], "content": content}
         self.update("tool_call", **tool)
         tool_id = tool["toolCallId"]
-        if self.host.ask(self, tool):
+        if automatic or self.host.ask(self, tool):
             return tool_id
         self.finish_tool(tool_id, False)
         return None
 
-    def finish_tool(self, tool_id, success):
+    def finish_tool(self, tool_id, success, result=None):
         if tool_id and not self.cancelled.is_set():
+            fields = {}
+            if result is not None:
+                text = self.host.editor.terminal_text(result["output"])
+                fields["content"] = [{"type": "content", "content": {
+                    "type": "text", "text": f"Exit {result['exit']}\n{text}"}}]
             self.update("tool_call_update", toolCallId=tool_id,
-                        status="completed" if success else "failed")
+                        status="completed" if success else "failed", **fields)
 
     def confirm_action(self, action, detail):
         if self.unavailable():
             return False
         if action == "Save file":
-            return self.writing == detail
+            return (self.writing is not None and self.writing[0] == detail
+                    and (not self.writing[1]
+                         or self.commands.allowed() and not self.command_unavailable()))
         if action == "Create directory":
             location = self.workspace.path / detail
             kind, title = "edit", f"Create local directory {detail}"
@@ -557,7 +571,8 @@ class Session:
         title = self.host.editor.terminal_text(title)
         self.text(title + "\n\n")
         content = [{"type": "content", "content": {"type": "text", "text": title}}]
-        self.local_tool = self.permission(title, kind, location, content)
+        self.local_tool = self.permission(title, kind, location, content,
+                                          automatic=self.commands.allowed())
         return bool(self.local_tool)
 
     def approve_edit(self, path, content):
@@ -576,22 +591,45 @@ class Session:
         location = self.workspace.path / path
         title = ("Edit " if item else "Create ") + self.host.editor.terminal_text(path)
         self.text(edit_preview(path, before, content, self.host.editor.terminal_text))
+        automatic = self.commands.allowed()
         tool_id = self.permission(title, "edit", location, [{
             "type": "diff", "path": str(location), "oldText": before if item else None,
-            "newText": content}])
+            "newText": content}], automatic=automatic)
         if not tool_id:
             return False
-        self.approved[path] = (hashlib.sha256(content.encode()).digest(), expected, tool_id)
+        self.approved[path] = (hashlib.sha256(content.encode()).digest(), expected, tool_id,
+                               automatic)
         return True
+
+    def command_unavailable(self):
+        channel = self.channel
+        if self.unavailable() or channel is None:
+            return True
+        try:
+            return channel.disconnected()
+        except (OSError, ValueError):
+            return True
+
+    def project_command(self, msg):
+        label = self.commands.title(msg)
+        title = label if len(label) <= 160 else label[:159] + "…"
+        content = [{"type": "content", "content": {"type": "text", "text": label}}]
+        tool_id = self.permission(title, "execute", self.workspace.path, content, automatic=True)
+        if not tool_id:
+            raise ValueError("Project command unavailable.")
+        result = None
+        try:
+            result = self.commands.execute(msg, self.command_unavailable)
+            return result
+        finally:
+            self.finish_tool(tool_id, result is not None and result["exit"] == 0, result)
 
     def file_action(self, msg):
         if self.unavailable():
             raise EOFError
-        op = msg.get("op")
-        fields = self.host.editor.REQUEST_FIELDS.get(op) if isinstance(op, str) else None
-        if (fields is None or set(msg) != {"type", "id", "op"} | fields
-                or any(not isinstance(msg[k], str) for k in fields)):
-            raise ValueError("Invalid workspace request.")
+        op = self.host.editor.request_operation(msg)
+        if op in ("shell", "publish"):
+            return self.project_command(msg)
         path = msg.get("path")
         if op == "read":
             item = self.workspace.call("read_project", {"path": path})
@@ -610,7 +648,7 @@ class Session:
             if hashlib.sha256(msg["content"].encode()).digest() != grant[0]:
                 self.finish_tool(grant[2], False)
                 raise ValueError("Unapproved edit.")
-            self.writing = path
+            self.writing = (path, grant[3])
             success = False
             try:
                 saved = self.workspace.call("save_project", {
@@ -642,8 +680,10 @@ class Session:
         parts = prompt.strip().split(maxsplit=1)
         if parts[0] == "/help":
             self.text("Use T3’s model picker or /model to see available Gemini models. "
-                      "File changes and enabled local tests request permission in T3. "
-                      "Use Supervised mode to review each request. If the private connection "
+                      "Use Supervised mode to review changes in the default editor. "
+                      "For project commands, run ccfleet gemini --full-access in a local "
+                      "terminal in this project. Revoke with ccfleet gemini --revoke-full-access. "
+                      "If the private connection "
                       "drops, /reconnect checks it without sending a prompt.")
             return {"stopReason": "end_turn"}
         if (self.resume_token and self.process is not None and self.process.poll() is not None):
@@ -677,6 +717,11 @@ class Session:
             return {"stopReason": "end_turn"}
         if self.channel is None:
             self.reconnect(allow_fresh=False)
+        request = {"type": "prompt", "text": prompt}
+        with self.commands.turn(request):
+            return self.prompt_turn(request)
+
+    def prompt_turn(self, request):
         ids = set()
         with self.send_lock:
             if self.turn_cancelled.is_set() or self.cancelled.is_set():
@@ -684,7 +729,6 @@ class Session:
             if self.offered_token and self.resume_token is None:
                 self.resume_token = self.offered_token
                 self.channel.send({"type": "enableResume"})
-            request = {"type": "prompt", "text": prompt}
             if self.can_cancel_turn:
                 self.turn_number += 1
                 self.active_turn = self.turn_number
@@ -731,7 +775,7 @@ class Session:
                         self.channel.send(response)
             return {"stopReason": "cancelled"}
         finally:
-            for _, _, tool_id in self.approved.values():
+            for _, _, tool_id, _ in self.approved.values():
                 self.finish_tool(tool_id, False)
             self.approved.clear()
 
