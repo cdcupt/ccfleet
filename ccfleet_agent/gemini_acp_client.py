@@ -9,6 +9,7 @@ import json
 import os
 import queue
 import secrets
+import select
 import signal
 import subprocess
 import sys
@@ -17,11 +18,13 @@ import time
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-VERSION = "0.2.21"
+VERSION = "0.2.22"
 # ACP reserves -32000 for sessions which require authentication.
 AUTH_REQUIRED = -32000
 INTERNAL_ERROR = -32603
 MAX_RECORD = 4 * 1024 * 1024
+# T3 limits each received ACP text block to 65,536 UTF-16 code units.
+TEXT_CHUNK_CHARS = 8192
 SLOT_BUSY = "Another Gemini editor is using this slot. Close it and reconnect."
 BUSY_RETRY_WINDOW = 10.0
 BUSY_RETRY_DELAY = 0.4
@@ -38,6 +41,12 @@ OPEN_TRANSPORT = ("The connection to the private Mac closed before Gemini was re
 OPEN_REFUSED = "The private slot could not open Gemini. Check Antigravity on the slot Mac."
 BAD_READY = "The slot returned an invalid Gemini startup reply. Check its CCFleet service version."
 SLOT_SESSION_TIMEOUT = "The Gemini editor session timed out. Reopen it to continue."
+RESUME_MISSING = "The previous Gemini session cannot be resumed."
+FRESH_REQUIRED = ("The previous Gemini conversation is unavailable on the slot. "
+                  "Send /reconnect to start a fresh Gemini conversation in this T3 thread. "
+                  "Gemini will no longer have the previous conversation context.")
+TURN_LOST = ("The connection to Gemini was interrupted. The previous request may have partly "
+             "run. Check any changes before continuing. CCFleet will not resend that request.")
 SLOT_LOGIN_REQUIRED = {
     "Open CCFleet Gemini Sign In in the private Mac owner's Applications folder, then reconnect.",
     "Sign in to the Antigravity editor",
@@ -60,6 +69,17 @@ OPEN_SLOT_ERRORS = {
         "The slot requires a newer CCFleet client. Run ccfleet update on this Mac.",
     "invalid Gemini editor frame size": BAD_READY,
     "invalid Gemini editor message": BAD_READY,
+}
+
+
+# A valid error frame reporting the slot/provider's loss can have a recoverable checkpoint.
+# Malformed frames and protocol violations always close the ACP session.
+INTERRUPTED_SLOT_ERRORS = {
+    SLOT_SESSION_TIMEOUT,
+    "The Gemini slot timed out. Reopen the editor to continue.",
+    "The Google editor agent stopped on the slot.",
+    "The Google editor could not complete this request.",
+    "The Gemini editor is unavailable on the private Mac. Reopen it to try again.",
 }
 
 
@@ -106,6 +126,10 @@ class RpcError(Exception):
     def __init__(self, code, message):
         super().__init__(message)
         self.code = code
+
+
+class SessionRejected(RpcError):
+    """Do not reuse a session after a protocol mismatch or rejection of its access."""
 
 
 def invalid(message):
@@ -164,7 +188,7 @@ class Session:
         raw = params.get("cwd")
         if not isinstance(raw, str) or not Path(raw).is_absolute():
             raise invalid("Choose an existing absolute local workspace folder.")
-        self.cancelled = threading.Event()  # Transport closed; never cleared.
+        self.cancelled = threading.Event()  # Logical session terminated; never cleared.
         self.turn_cancelled = threading.Event()
         self.cancel_timer = None
         self.can_cancel_turn = False
@@ -179,6 +203,9 @@ class Session:
             )
         except (ValueError, OSError, RuntimeError, KeyError) as exc:
             raise invalid("The local workspace or test runner is unavailable.") from exc
+        self.resume_token = None
+        self.offered_token = None
+        self.reconnecting = False
         self.process = None
         self.lock = threading.Lock()
         self.channel = None
@@ -189,11 +216,11 @@ class Session:
         self.writing = None
         self.local_tool = None
 
-    def _open_channel(self):
+    def _open_channel(self, token):
         # Only the launcher chooses this fixed command and environment. ACP mcpServers, _meta,
         # shell arguments and environment from the selected project are never sent to the slot.
         with self.lock:
-            if self.cancelled.is_set():
+            if self.cancelled.is_set() or self.reconnecting and self.turn_cancelled.is_set():
                 raise EOFError
             try:
                 self.process = subprocess.Popen(
@@ -208,7 +235,11 @@ class Session:
                              daemon=True).start()
             self.channel = self.host.editor.Channel(self.process)
         try:
-            self.channel.send({"type": "open", "version": 1})
+            with self.send_lock:
+                if token is None:
+                    self.channel.send({"type": "open", "version": 1})
+                else:
+                    self.channel.send({"type": "resume", "version": 1, "resumeToken": token})
             return self.channel.receive(timeout=420)
         except (TimeoutError, subprocess.TimeoutExpired):
             raise RpcError(INTERNAL_ERROR, OPEN_TIMEOUT) from None
@@ -219,6 +250,8 @@ class Session:
                 reason = status.get(timeout=0.25)
             except queue.Empty:
                 reason = None
+            if reason and (reason[0] == AUTH_REQUIRED or "(HTTP 403)" in reason[1]):
+                raise SessionRejected(*reason) from None
             raise RpcError(*(reason or (INTERNAL_ERROR, OPEN_TRANSPORT))) from None
 
     def open(self):
@@ -226,21 +259,35 @@ class Session:
             if self.workspace.test_directory(self.host.test_folder) is None:
                 raise invalid("Choose an ordinary local test subfolder.")
             self.workspace.test_relative = self.host.test_folder
+        self.connect()
+        return {"sessionId": self.id, "configOptions": self.config(), "models": {
+            "currentModelId": self.current, "availableModels": [
+                {"modelId": m, "name": m} for m in self.models
+            ],
+        }}
+
+    def connect(self, token=None):
+        previous_model = self.current
         # A short-lived T3 model-discovery session may overlap the first actual thread.
         # Retry only admission explicitly refused as busy, before any prompt can be sent.
         deadline = None
         delay = BUSY_RETRY_DELAY
         while True:
             try:
-                ready = self._open_channel()
+                ready = self._open_channel(token)
                 break
             except ValueError as exc:
                 reason = str(exc)
+                if token is not None and reason == RESUME_MISSING:
+                    self.resume_token = None
+                    raise RpcError(INTERNAL_ERROR, FRESH_REQUIRED) from None
                 if reason in SLOT_LOGIN_REQUIRED:
-                    raise RpcError(AUTH_REQUIRED, "Open CCFleet Gemini Sign In on your private "
-                                   "Mac, then start a new thread.") from None
+                    raise SessionRejected(AUTH_REQUIRED, "Open CCFleet Gemini Sign In on your "
+                                          "private Mac, then start a new thread.") from None
                 if reason != SLOT_BUSY:
                     message = OPEN_SLOT_ERRORS.get(reason, OPEN_REFUSED)
+                    if message == BAD_READY:
+                        raise SessionRejected(INTERNAL_ERROR, message) from None
                     raise RpcError(INTERNAL_ERROR, message) from None
             self._retire_channel(graceful=False)
             now = time.monotonic()
@@ -248,69 +295,138 @@ class Session:
                 deadline = now + BUSY_RETRY_WINDOW
             if now + delay > deadline:
                 raise RpcError(INTERNAL_ERROR, "Another Gemini session is using your slot. "
-                               "Close it before opening a new T3 Gemini thread.")
+                               "Close it before retrying.")
             if self.cancelled.wait(delay):
                 raise EOFError
             delay = min(1.5, delay * 2)
-        self.current = ready.get("model")
-        if ready.get("type") != "ready" or not isinstance(self.current, str):
-            raise RpcError(INTERNAL_ERROR, BAD_READY)
-        models = ready.get("models", [self.current])
-        if (not isinstance(models, list) or not 1 <= len(models) <= 256
-                or any(not isinstance(m, str) or not self.host.editor.MODEL_ID.fullmatch(m)
-                       for m in models) or self.current not in models
-                or len(set(models)) != len(models)):
-            raise RpcError(INTERNAL_ERROR, BAD_READY)
+        try:
+            current, models, offered, tagged = self.host.editor.ready_session(ready, token)
+        except ValueError:
+            raise SessionRejected(INTERNAL_ERROR, BAD_READY) from None
+        self.can_cancel_turn = tagged
+        self.offered_token = offered
+        models = models or [current]
+        if token is not None:
+            # A restored conversation already contains a user's work. For new
+            # conversations, opt in only upon the first real prompt, never discovery.
+            with self.send_lock:
+                self.channel.send({"type": "enableResume"})
         self.models = models
-        capabilities = ready.get("capabilities")
-        self.can_cancel_turn = (isinstance(capabilities, dict)
-                                and capabilities.get("cancelTurn") is True)
-        return {"sessionId": self.id, "configOptions": self.config(), "models": {
-            "currentModelId": self.current, "availableModels": [
-                {"modelId": m, "name": m} for m in models
-            ],
-        }}
+        self.current = current
+        if previous_model is not None and previous_model != current:
+            try:
+                if previous_model not in models:
+                    raise invalid("The previous Gemini model is unavailable. Select an offered "
+                                  "model in T3 before sending your next instruction.")
+                self.select_model(previous_model)
+            except RpcError:
+                self.current = previous_model
+                raise
+
+    def reconnect(self, *, allow_fresh):
+        if not self.resume_token and not allow_fresh:
+            raise RpcError(INTERNAL_ERROR, FRESH_REQUIRED)
+        native_context = self.resume_token is not None
+        with self.lock:
+            self.reconnecting = True
+        try:
+            try:
+                self.connect(self.resume_token)
+            finally:
+                with self.lock:
+                    self.reconnecting = False
+            if self.turn_cancelled.is_set():
+                raise EOFError
+        except (RpcError, ValueError, OSError, EOFError, subprocess.SubprocessError) as exc:
+            self._retire_channel(graceful=False)
+            if self.turn_cancelled.is_set() and not isinstance(exc, SessionRejected):
+                raise RpcError(INTERNAL_ERROR,
+                               "Reconnection interrupted before sending a prompt.") from None
+            raise
+        self.text("Reconnected to the previous Gemini conversation.\n\n" if native_context else
+                  "Connected to a fresh Gemini conversation in this thread. Gemini starts "
+                  "without the earlier conversation context. Send your next instruction.")
+
+    def detach(self):
+        self._retire_channel(graceful=False)
+        self.offered_token = None
+        self.seen.clear()
+        self.approved.clear()
+        self.writing = self.local_tool = None
 
     def unavailable(self):
-        return self.cancelled.is_set() or self.turn_cancelled.is_set() or (
-            self.process is not None and self.process.poll() is not None
-        )
+        return (self.cancelled.is_set() or self.turn_cancelled.is_set()
+                or self.process is None or self.process.poll() is not None)
 
     def interrupt(self):
         with self.lock:
             if self.cancelled.is_set():
                 return
             self.cancelled.set()
-            if self.process and self.process.poll() is None:
+            proc = self.process
+            if proc is None or proc.poll() is not None:
+                return
+            # An intentional close relinquishes the slot's short-lived resume lease.
+            # Avoid blocking teardown if another writer already owns a stalled SSH pipe.
+            if self.resume_token and self.send_lock.acquire(blocking=False):
+                try:
+                    with contextlib.suppress(OSError, ValueError, subprocess.TimeoutExpired):
+                        if select.select([], [proc.stdin], [], 0)[1]:
+                            self.channel.send({"type": "close"})
+                            proc.wait(timeout=0.5)
+                finally:
+                    self.send_lock.release()
+            if proc.poll() is None:
                 with contextlib.suppress(ProcessLookupError):
-                    os.killpg(self.process.pid, signal.SIGTERM)
+                    os.killpg(proc.pid, signal.SIGTERM)
 
     def cancel_turn(self):
-        if not self.can_cancel_turn:
-            self.turn_cancelled.set()
-            self.interrupt()
-            return
         with self.lock:
             if self.turn_cancelled.is_set() or self.cancelled.is_set():
                 return
             self.turn_cancelled.set()
-            self.cancel_timer = threading.Timer(CANCEL_GRACE, self._expire_cancel)
-            self.cancel_timer.daemon = True
-            self.cancel_timer.start()
+            if self.reconnecting:
+                # No model prompt has been sent on this transport; the native slot can
+                # still resume the old conversation using the outstanding lease.
+                if self.process is not None and self.process.poll() is None:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(self.process.pid, signal.SIGKILL)
+                return
+            if self.can_cancel_turn:
+                self.cancel_timer = threading.Timer(CANCEL_GRACE, self._expire_cancel)
+                self.cancel_timer.daemon = True
+                self.cancel_timer.start()
+        if not self.can_cancel_turn:
+            self.interrupt()
+            return
         # The prompt and its cancel must reach the slot in order, even when T3 steers
         # before the worker has started writing. The watchdog can kill a stuck write.
         with self.send_lock:
-            if self.active_turn is not None and not self.cancelled.is_set():
+            # EOF cleanup can retire a channel before the ACP turn has settled.
+            # Snapshot that particular stream so a late Steer cannot target a lost channel.
+            with self.lock:
+                channel = self.channel
+                turn = self.active_turn
+            if channel is not None and turn is not None and not self.cancelled.is_set():
                 try:
-                    self.channel.send({"type": "cancel", "turn": self.active_turn})
+                    channel.send({"type": "cancel", "turn": turn})
                 except (OSError, ValueError):
-                    self.interrupt()
+                    # If SSH fails while sending cancel, let the active worker report
+                    # the uncertain turn and detach. Explicit session close is separate.
+                    with self.lock:
+                        proc = self.process if self.channel is channel else None
+                        if proc is not None and proc.poll() is None:
+                            with contextlib.suppress(ProcessLookupError):
+                                os.killpg(proc.pid, signal.SIGKILL)
 
     def _expire_cancel(self):
         with self.lock:
             if self.cancel_timer is not threading.current_thread():
                 return
-            self.cancelled.set()
+            # A silent transport is uncertain too. Only a fresh, authenticated
+            # session/resume may establish that the original conversation survived.
+            if not self.resume_token:
+                self.cancelled.set()
             if self.process is not None and self.process.poll() is None:
                 with contextlib.suppress(ProcessLookupError):
                     os.killpg(self.process.pid, signal.SIGKILL)
@@ -352,6 +468,7 @@ class Session:
 
     def close(self):
         self._retire_channel(graceful=True)
+        self.resume_token = self.offered_token = None
         self.workspace.close()
 
     def send_request(self, message):
@@ -362,9 +479,8 @@ class Session:
             # write. Inspect only that frame. Never retry a prompt or a model change.
             try:
                 self.channel.receive(timeout=0.25)
-            except (OSError, EOFError, ValueError) as exc:
-                if isinstance(exc, ValueError) and str(exc) == SLOT_SESSION_TIMEOUT:
-                    raise
+            except (OSError, EOFError):
+                pass
             raise
 
     def update(self, event, **fields):
@@ -373,9 +489,13 @@ class Session:
         }})
 
     def text(self, value):
-        if self.turn_cancelled.is_set():
-            return
-        self.update("agent_message_chunk", content={"type": "text", "text": value})
+        # Keep the whole proposed patch reviewable, including astral Unicode.
+        for start in range(0, len(value), TEXT_CHUNK_CHARS):
+            if self.turn_cancelled.is_set():
+                return
+            self.update("agent_message_chunk", content={
+                "type": "text", "text": value[start:start + TEXT_CHUNK_CHARS],
+            })
 
     def config(self):
         return [{"id": "model", "name": "Model", "category": "model", "type": "select",
@@ -388,7 +508,10 @@ class Session:
             model = self.current
         if model not in self.models:
             raise invalid("Choose a Gemini model offered by this slot.")
-        if model != self.current:
+        if model != self.current and self.channel is None:
+            self.current = model
+            self.update("config_option_update", configOptions=self.config())
+        elif model != self.current:
             self.send_request({"type": "set_model", "model": model})
             reply = self.channel.receive()
             if reply.get("type") != "model" or reply.get("model") not in self.models:
@@ -520,7 +643,22 @@ class Session:
         if parts[0] == "/help":
             self.text("Use T3’s model picker or /model to see available Gemini models. "
                       "File changes and enabled local tests request permission in T3. "
-                      "Use Supervised mode to review each request.")
+                      "Use Supervised mode to review each request. If the private connection "
+                      "drops, /reconnect checks it without sending a prompt.")
+            return {"stopReason": "end_turn"}
+        if (self.resume_token and self.process is not None and self.process.poll() is not None):
+            # A previously completed turn has no unconfirmed prompt. This new instruction
+            # can open a fresh authenticated transport before it is submitted for the first time.
+            self.detach()
+        if parts[0] == "/reconnect":
+            if len(parts) != 1:
+                raise invalid("Send /reconnect by itself. It does not submit a model prompt.")
+            if self.process is not None and self.process.poll() is not None:
+                self.detach()
+            if self.channel is None:
+                self.reconnect(allow_fresh=True)
+            else:
+                self.text("The Gemini connection is already open for this thread.")
             return {"stopReason": "end_turn"}
         if parts[0] == "/model":
             if len(parts) == 1:
@@ -537,10 +675,15 @@ class Session:
                 except RpcError as exc:
                     self.text(str(exc))
             return {"stopReason": "end_turn"}
+        if self.channel is None:
+            self.reconnect(allow_fresh=False)
         ids = set()
         with self.send_lock:
             if self.turn_cancelled.is_set() or self.cancelled.is_set():
                 return {"stopReason": "cancelled"}
+            if self.offered_token and self.resume_token is None:
+                self.resume_token = self.offered_token
+                self.channel.send({"type": "enableResume"})
             request = {"type": "prompt", "text": prompt}
             if self.can_cancel_turn:
                 self.turn_number += 1
@@ -563,6 +706,12 @@ class Session:
                     }.get(reason, "refusal")}
                 if kind == "text" and isinstance(msg.get("text"), str):
                     self.text(msg["text"])
+                    continue
+                if kind == "progress":
+                    if (not self.resume_token or not self.can_cancel_turn
+                            or set(msg) != {"type", "turn"} or type(msg["turn"]) is not int
+                            or msg["turn"] != self.active_turn):
+                        raise ValueError("Unexpected progress frame.")
                     continue
                 ident = msg.get("id")
                 if (kind != "request" or type(ident) is not int or ident <= 0
@@ -666,6 +815,7 @@ class Bridge:
         result = None
         error = None
         broken = False
+        link_notice = None
         try:
             if method == "session/new":
                 result = session.open()
@@ -679,14 +829,32 @@ class Bridge:
                     if params.get("configId") != "model":
                         raise invalid("Unknown session option.")
                     result = {"configOptions": session.select_model(params.get("value"))}
+        except SessionRejected as exc:
+            broken, error = True, exc
         except RpcError as exc:
             error = exc
         except (OSError, EOFError, ValueError, TypeError, subprocess.SubprocessError) as exc:
-            broken = True
-            if isinstance(exc, ValueError) and str(exc) == SLOT_SESSION_TIMEOUT:
-                error = RpcError(INTERNAL_ERROR, "The slot reported that this Gemini session "
-                                 "timed out. Open a new T3 thread to reconnect.")
+            recoverable = (isinstance(exc, (OSError, EOFError, subprocess.TimeoutExpired))
+                           or isinstance(exc, ValueError) and str(exc) in INTERRUPTED_SLOT_ERRORS)
+            if (recoverable and method != "session/new" and not session.cancelled.is_set()
+                    and (not session.turn_cancelled.is_set() or session.resume_token)):
+                # EOF can arrive after Steer was sent but before its acknowledgement.
+                # Keep only the separately authorized resume handle, never replay the turn.
+                session.detach()
+                status = ("The slot reported that this Gemini session timed out. "
+                          if str(exc) == SLOT_SESSION_TIMEOUT else "")
+                recovery = ("Send your next instruction here to resume Gemini’s conversation."
+                            if session.resume_token else FRESH_REQUIRED)
+                summary = (TURN_LOST if method == "session/prompt" else
+                           "The Gemini connection was interrupted before confirming the model.")
+                link_notice = status + summary + " " + recovery
+                error = RpcError(INTERNAL_ERROR, link_notice)
+            elif isinstance(exc, ValueError) and str(exc) in SLOT_LOGIN_REQUIRED:
+                broken = True
+                error = SessionRejected(AUTH_REQUIRED, "Open CCFleet Gemini Sign In on your "
+                                        "private Mac, then start a new thread.")
             else:
+                broken = True
                 error = RpcError(INTERNAL_ERROR, "The private Gemini connection ended. "
                                  "Open a new T3 thread.")
         finally:
@@ -701,8 +869,10 @@ class Bridge:
                         session.finish_turn()
                         if steered or session.cancelled.is_set():
                             result, error = {"stopReason": "cancelled"}, None
-                            if (steered and not self.closed
-                                    and (broken or session.cancelled.is_set())):
+                            if steered and not self.closed and link_notice:
+                                session.text(link_notice)
+                            elif (steered and not self.closed
+                                  and (broken or session.cancelled.is_set())):
                                 if session.can_cancel_turn:
                                     session.text("The slot did not confirm the interruption. "
                                                  "Open a new T3 thread to reconnect.")
