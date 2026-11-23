@@ -201,13 +201,14 @@ def test_wallet_hold_settle_replay_and_concurrent_admission(router):
     with ThreadPoolExecutor(2) as ex:
         [rid] = filter(None, ex.map(reserve, range(2)))
     assert c.store.wallet_balance("alice") == 0
-    c.store.openrouter_submit(rid)
+    c.store.openrouter_submit(rid, "alice", token)
     c.store.openrouter_identify(rid, "gen-wallet")
     for _ in range(2):
         c.store.openrouter_settle(rid, "gen-wallet", Decimal("1.00"))
     with pytest.raises(BillingError, match="Conflicting"):
         c.store.openrouter_settle(rid, "gen-wallet", Decimal("0.50"))
-    assert c.store.openrouter_receipts("alice")[0]["debit_cents"] == 105
+    receipt = c.store.openrouter_receipts("alice")[0]
+    assert receipt["debit_cents"] == 105 and Decimal(receipt["fee_usd"]) == Decimal(".05")
     assert c.store.wallet_balance("alice") == 0
 
 
@@ -255,3 +256,21 @@ def test_config_fails_closed_and_secret_permissions(tmp_path):
     path.chmod(0o644)
     with pytest.raises(ValueError):
         openrouter.read_key(path)
+
+def test_rotated_key_cannot_submit_and_ambiguous_hold_needs_review(router):
+    c = router
+    grant(c)
+    token = c.store.openrouter_key("alice")
+    stale = c.store.openrouter_reserve("alice", token, MODELS[0], 5)
+    new = c.store.openrouter_key("alice")
+    with pytest.raises(BillingError):
+        c.store.openrouter_submit(stale, "alice", token)
+    c.store.openrouter_release(stale)
+    rid = c.store.openrouter_reserve("alice", new, MODELS[0], 5)
+    c.store.openrouter_submit(rid, "alice", new)
+    c.store.openrouter_release(rid)
+    assert c.store.wallet_balance("alice") == 2995
+    with pytest.raises(BillingError):
+        c.store.openrouter_void_unbilled(rid, "Synthetic provider evidence", 0)
+    c.store.openrouter_void_unbilled(rid, "Synthetic provider evidence", time.time() + 1)
+    assert c.store.wallet_balance("alice") == 3000

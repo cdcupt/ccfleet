@@ -39,6 +39,9 @@ def _parser() -> argparse.ArgumentParser:
     receipt = sub.add_parser("openrouter-reconcile", help="verify a pending generation receipt")
     receipt.add_argument("request_id")
     receipt.add_argument("generation_id")
+    unbilled = sub.add_parser("openrouter-void", help="release a verified unbilled request hold")
+    unbilled.add_argument("request_id")
+    unbilled.add_argument("--verified-no-charge", required=True, metavar="EVIDENCE_REFERENCE")
     routes = sub.add_parser("api-model", help="manage an experimental slot-bound API model"
                             ).add_subparsers(dest="action", required=True)
     routes.add_parser("endpoints", help="list single-slot connection IDs").add_argument("slot")
@@ -629,12 +632,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             cfg = Config(**{**cfg.__dict__, "db_path": args.db})
         store = Store(cfg.db_path)
         try:
-            if args.command == "openrouter-reconcile":
+            if args.command in ("openrouter-reconcile", "openrouter-void"):
                 from . import openrouter
-                service = openrouter.Service(cfg, store)
-                if not service.models or not service.lookup(args.request_id, args.generation_id):
-                    raise StoreError("no verified matching OpenRouter receipt")
-                print("OpenRouter receipt settled.")
+                try:
+                    if args.command == "openrouter-void":
+                        store.openrouter_void_unbilled(args.request_id, args.verified_no_charge,
+                            time.time() - cfg.gateway_request_timeout_s - 120)
+                        print("Released the unbilled OpenRouter hold.")
+                    else:
+                        service = openrouter.Service(cfg, store)
+                        if not service.models or not service.lookup(
+                                args.request_id, args.generation_id):
+                            raise StoreError("no verified matching OpenRouter receipt")
+                        print("OpenRouter receipt settled.")
+                except (ValueError, OSError) as exc:
+                    raise StoreError("OpenRouter receipt operation failed") from exc
                 return EXIT_OK
             if args.command == "api-model":
                 if args.action == "endpoints":

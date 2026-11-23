@@ -8,6 +8,7 @@ import json
 import os
 import re
 import socket
+import sqlite3
 import stat
 import threading
 import time
@@ -201,7 +202,8 @@ class Service:
                     return
                 try:
                     self.lookup(row["id"], row["generation_id"])
-                except (ValueError, OSError, http.client.HTTPException, KeyError, TypeError):
+                except (ValueError, OSError, http.client.HTTPException, sqlite3.Error,
+                        KeyError, TypeError):
                     continue  # Leave the receipt pending for the next read-only lookup.
             self.stop.wait(30)
 
@@ -290,7 +292,7 @@ class Service:
                 return
             watcher = threading.Thread(target=watch, daemon=True)
             watcher.start()
-            store.openrouter_submit(request_id)
+            store.openrouter_submit(request_id, owner, token)
             outbound = {
                 "Authorization": "Bearer " + self.key,
                 "Content-Type": "application/json",
@@ -377,7 +379,7 @@ class Service:
                 handler.wfile.write(f"{len(frame):x}\r\n".encode() + frame + b"\r\n")
                 handler.wfile.flush()
             handler.wfile.write(b"0\r\n\r\n")
-        except (OSError, http.client.HTTPException, ValueError, KeyError, TypeError):
+        except (OSError, http.client.HTTPException, sqlite3.Error, ValueError, KeyError, TypeError):
             if not committed:
                 gateway.model_error(handler, 502, "OpenRouter request interrupted.")
         finally:

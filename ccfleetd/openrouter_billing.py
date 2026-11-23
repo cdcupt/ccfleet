@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS openrouter_requests (
     state TEXT NOT NULL CHECK(state IN ('held','submitted','settled','released')),
     hold_cents INTEGER NOT NULL,
     cost_usd TEXT,
+    fee_usd TEXT,
+    review_note TEXT,
     debit_cents INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_openrouter_account ON openrouter_requests(account_id,created_at);
@@ -87,11 +89,15 @@ class OpenRouterStore:
             )
         return request_id
 
-    def openrouter_submit(self, request_id):
+    def openrouter_submit(self, request_id, owner, token):
         with self._write_txn() as db:
+            if wallet_topups.spending_blocked(db, owner):
+                raise BillingError("OpenRouter spending is paused.")
             if not db.execute(
-                "UPDATE openrouter_requests SET state='submitted' WHERE id=? AND state='held'",
-                (request_id,),
+                "UPDATE openrouter_requests SET state='submitted' WHERE id=? "
+                "AND account_id=? AND state='held' AND EXISTS "
+                "(SELECT 1 FROM openrouter_accounts WHERE account_id=? AND token_hash=?)",
+                (request_id, owner, owner, hashlib.sha256(token.encode()).hexdigest()),
             ).rowcount:
                 raise BillingError("OpenRouter request is no longer reserved.")
 
@@ -102,6 +108,17 @@ class OpenRouterStore:
                 "AND (state='held' OR (state='submitted' AND ? AND generation_id IS NULL))",
                 (request_id, rejected),
             )
+
+    def openrouter_void_unbilled(self, request_id, note, before):
+        """Release an ambiguous hold only after operator verification of zero cost."""
+        reason = wallet.reason(note)
+        with self._write_txn() as db:
+            if not db.execute(
+                "UPDATE openrouter_requests SET state='released', review_note=? "
+                "WHERE id=? AND state='submitted' AND created_at<?",
+                (reason, request_id, before),
+            ).rowcount:
+                raise BillingError("No expired, unsettled OpenRouter submission matches.")
 
     def openrouter_identify(self, request_id, generation, *, verified=False):
         if not isinstance(generation, str) or not re.fullmatch(
@@ -141,7 +158,8 @@ class OpenRouterStore:
             carry = db.execute(
                 "SELECT remainder_usd FROM openrouter_accounts WHERE account_id=?", (owner,)
             ).fetchone()[0]
-            total = Decimal(cost) * MULTIPLIER + Decimal(carry)
+            fee = Decimal(cost) * (MULTIPLIER - 1)
+            total = Decimal(cost) + fee + Decimal(carry)
             cents = int(total * 100)
             if cents > row["hold_cents"]:
                 raise BillingError(
@@ -152,9 +170,9 @@ class OpenRouterStore:
                 (str(total - Decimal(cents) / 100), owner),
             )
             db.execute(
-                "UPDATE openrouter_requests SET state='settled',cost_usd=?,debit_cents=? "
+                "UPDATE openrouter_requests SET state='settled',cost_usd=?,fee_usd=?,debit_cents=? "
                 "WHERE id=?",
-                (str(cost), cents, request_id),
+                (str(cost), str(fee), cents, request_id),
             )
 
     def openrouter_pending(self, now):
@@ -182,7 +200,7 @@ class OpenRouterStore:
             return [
                 dict(row)
                 for row in self._conn.execute(
-                    "SELECT id,model,generation_id,state,cost_usd,debit_cents,"
+                    "SELECT id,model,generation_id,state,cost_usd,fee_usd,debit_cents,"
                     "hold_cents,created_at "
                     "FROM openrouter_requests WHERE account_id=? "
                     "ORDER BY created_at DESC LIMIT 50",

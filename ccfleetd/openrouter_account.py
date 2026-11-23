@@ -82,7 +82,7 @@ def page(service, cfg, account, session_id, *, issued=None):
                 else label("Reserved", "已预留") + " " + wallet.display(row["hold_cents"])
             )
         else:
-            fee = Decimal(cost) * Decimal("0.05")
+            fee = Decimal(row["fee_usd"])
             detail = (
                 label("Usage", "用量费")
                 + " $"
@@ -94,6 +94,8 @@ def page(service, cfg, account, session_id, *, issued=None):
                 + " = $"
                 + format(Decimal(cost) + fee, "f")
             )
-        body += "<p><code>" + escape(row["model"]) + "</code> · " + detail + "</p>"
+        body += ("<p><code>" + escape(row["model"]) + "</code> · " + detail
+                 + "<br><small>" + label("Request", "请求") + " "
+                 + escape(row["id"]) + "</small></p>")
     viewer = usersite.viewer_for(account, session_id, cfg, service.store)
     return usersite.Outcome(200, body=usersite._shell("OpenRouter", body, viewer=viewer))
