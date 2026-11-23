@@ -545,9 +545,13 @@ class GatewayRuntime:
         try:
             # A queued request keeps its original selection. Revocation or an
             # endpoint edit while waiting cannot confer authority on new slots.
-            current = authenticate(handler.headers, self.store, now=time.time(), touch=False)
-            if (current is None or current["id"] != key["id"]
-                    or current["generation"] != key["generation"]):
+            if routed:
+                still_authorized = self.store.openrouter_principal(token) == owner
+            else:
+                current = authenticate(handler.headers, self.store, now=time.time(), touch=False)
+                still_authorized = (current is not None and current["id"] == key["id"]
+                                    and current["generation"] == key["generation"])
+            if not still_authorized:
                 model_error(handler, 403, "Endpoint authorization changed.")
                 return
             handler.connection.settimeout(30)
@@ -605,11 +609,12 @@ class GatewayRuntime:
                 body_timer.cancel()
             # Only the sanitized serialized body is needed during a long stream.
             # Do not retain two additional full-context copies until it finishes.
-            del raw, value
+            del raw
             handler.connection.settimeout(15)
             if routed:
                 self.openrouter.forward(handler, owner, token, value, headers, size)
             else:
+                del value
                 self._forward(handler, key, session, pinned, model_key, headers, body)
         finally:
             self._release(key["id"], size)
