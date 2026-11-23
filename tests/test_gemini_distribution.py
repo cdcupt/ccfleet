@@ -232,9 +232,18 @@ def test_acp_component_requires_its_own_signed_digest(tmp_path, monkeypatch):
     pin = hashlib.sha256(content).hexdigest()
     monkeypatch.setattr(dist, "__file__", str(tmp_path / "gemini_distribution.py"))
     monkeypatch.setattr(dist, "_fetch", lambda *_: pytest.fail("unexpected network request"))
-    assert all(op not in pins for _, _, pins in dist.EDITOR_HISTORY)
+    # Older installed clients also fetch the 0.2.18 ACP helper by its signed digest.
+    version, _, old_pins = next(entry for entry in dist.EDITOR_HISTORY if op in entry[2])
+    assert version == "0.2.18" and old_pins[op] != pin
+    old = b"earlier T3 helper fixture"
+    old_pin = hashlib.sha256(old).hexdigest()
+    history = [(v, revision, {**pins, op: old_pin} if v == version else pins)
+               for v, revision, pins in dist.EDITOR_HISTORY]
+    monkeypatch.setattr(dist, "EDITOR_HISTORY", history)
+    (tmp_path / dist.editor_snapshot(name, version)).write_bytes(old)
     (tmp_path / dist.editor_snapshot(name)).write_bytes(content)
     assert invoke(tmp_path, {"op": op, "sha256": pin}) == (0, content)
+    assert invoke(tmp_path, {"op": op, "sha256": old_pin}) == (0, old)
     for request in ({"op": op}, {"op": op, "sha256": "0" * 64},
                     {"op": op, "sha256": pin, "path": name},
                     {"op": "editor-client", "sha256": pin}):
