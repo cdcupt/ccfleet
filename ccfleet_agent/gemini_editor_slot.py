@@ -85,7 +85,10 @@ PUBLISH_TOOL = {
 GUIDE = (
     "You are the user's interactive CCFleet project editor. The project is on the "
     "connecting computer. Use client_view_file, client_edit_file and client_create_file "
-    "with absolute paths in the current project. Use ccfleetlocal list_project, "
+    "with absolute paths based on your agent session's virtual project directory. The local "
+    "shell's pwd and Git paths belong to the connecting computer; when you use client file "
+    "tools, combine your virtual project directory with the project-relative filename. "
+    "Use ccfleetlocal list_project, "
     "make_project_directory and test_project for local directories and tests. These are lazy "
     "tools: invoke call_mcp_tool with ServerName=ccfleetlocal, ToolName=test_project, Arguments={} "
     "for tests. For list_project or make_project_directory use Arguments with the relative path. "

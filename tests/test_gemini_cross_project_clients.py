@@ -1,9 +1,14 @@
 """Exercise terminal/ACP control messages and the actual file-backed Mac grant."""
 
 import json
+import os
+import pty
+import select
+import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -401,3 +406,98 @@ assert get()=={"type":"close"}
     session(host, "terminal", ["initial", "next"], monkeypatch)
     assert len(attempts) == 1 and not (host.project / "old").exists()
     assert (host.project / "new-turn").is_dir()
+
+
+def test_terminal_pending_approval_dismisses_without_keystroke_on_new_grant(navigation):
+    host, owner = navigation
+    owner.disable_all()
+    host.project = owner.project / "second"
+    slot_peer(
+        host,
+        {"projectShell": True},
+        """
+assert get().get("projectShell") is None
+assert not tool(1,"mkdir",path="old")
+assert not tool(2,"approve",path="subsequent",content="stale")
+put({"type":"end","reason":"end_turn"})
+frame=get()
+assert frame.get("projectShell") is True and frame["text"]=="new command"
+assert tool(1,"mkdir",path="new-turn")
+put({"type":"end","reason":"end_turn"})
+assert get()=={"type":"close"}
+""",
+    )
+    code = """
+import sys,json,os
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+from ccfleet_agent import project_files as files, workspace_tools as tools, gemini_editor_client as ed
+files._account_home=lambda:Path(sys.argv[2])
+ed.run(Path(sys.argv[2])/'second',json.loads(sys.argv[4]),{'PATH':os.defpath},tools,files,fleet_home=Path(sys.argv[3]))
+"""
+    master, slave = pty.openpty()
+    try:
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                code,
+                str(Path(__file__).resolve().parents[1]),
+                str(owner.project),
+                str(owner.fleet_home),
+                json.dumps(host.bridge.command),
+            ],
+            cwd=host.project,
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+        )
+    finally:
+        os.close(slave)
+    buffer = bytearray()
+
+    def wait_for(word):
+        until = time.monotonic() + 6
+        target = word.encode()
+        while target not in buffer and time.monotonic() < until:
+            if select.select([master], [], [], 0.1)[0]:
+                buffer.extend(os.read(master, 16384))
+        assert target in buffer, bytes(buffer)[-800:]
+        del buffer[: buffer.find(target) + len(target)]
+
+    try:
+        wait_for("You › ")
+        os.write(master, b"first instruction\n")
+        wait_for("Create directory on this Mac (old)? [y/N] ")
+        os.write(master, b"y")
+        owner.enable_all()
+        wait_for("Project access changed.")
+        wait_for("You › ")
+        os.write(master, b"yes\n")
+        wait_for("That approval expired.")
+        wait_for("You › ")
+        os.write(master, b"new command\n")
+        wait_for("You › ")
+        os.write(master, b"/exit\n")
+        until = time.monotonic() + 6
+        while proc.poll() is None and time.monotonic() < until:
+            if select.select([master], [], [], 0.10)[0]:
+                try:
+                    os.read(master, 4096)
+                except OSError:
+                    break
+        assert proc.wait(timeout=2) == 0
+    finally:
+        os.close(master)
+        if proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=4)
+    assert (host.project / "new-turn").is_dir()
+    assert not (host.project / "old").exists()
+    prompts = [
+        m["text"]
+        for m in (json.loads(row) for row in host.log.read_text().splitlines())
+        if m.get("type") == "prompt"
+    ]
+    assert prompts == ["first instruction", "new command"]
