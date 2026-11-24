@@ -137,3 +137,10 @@ def test_fresh_editor_install_recovers_only_pinned_public_sources(tmp_path, monk
     assert fetch(dist, source, destination, name, revision, wanted) == raw
     with pytest.raises(ValueError, match="checksum"):
         fetch(dist, source, destination, name, revision, "0" * 64)
+
+
+def test_the_installed_terminal_snapshot_is_accepted_as_a_predecessor():
+    """The paired Mac holds the pre-fix 0.2.28 snapshot; installing must replace it."""
+    installer = runpy.run_path(str(ROOT / "tools/install_workspace_slot.py"))
+    stale = "ae78ecd30c6115cbaa6a4229539d214b804cc5b1559ee0c723f856278e71af67"
+    assert stale in installer["PREDECESSORS"]["gemini_native_terminal-0.2.28.py"]
