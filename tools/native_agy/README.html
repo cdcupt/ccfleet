@@ -1,13 +1,15 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><title>CCFleet native agy verification preview</title>
-<h1>Test native agy through your private slot</h1>
-<p>This opt-in macOS preview exercises the real CCFleet relay and two unmodified Google Antigravity CLI processes. Its model responses are scripted. Both CLIs use disposable profiles and the client creates a temporary Git repository. The check uses no Google model credits.</p>
-<h2>Run the paired test</h2>
-<p>Download the preview ZIP from this prerelease, unpack it, and open Terminal in the extracted <code>ccfleet-native-check</code> folder. Install Google’s <code>agy</code> on the client Mac first. The private Mac slot must have the native-check handler. If this client already has a Gemini workspace pairing for that slot, run the check directly. To pair it first, use your CCFleet Gemini setup code with the bundled launcher.</p>
+<html lang="en"><meta charset="utf-8"><title>CCFleet native agy terminal</title>
+<h1>Run the stock Antigravity CLI with the model session on your paired slot</h1>
+<p>This macOS preview runs the real CCFleet relay with two unmodified Google Antigravity CLI processes. The client keeps the repository, the shell and every permission decision; the paired private Mac runs the model session under its own Google sign-in and has no copy of your project. The slot's model can only use the client's bridged tools (<code>read_file</code>, <code>write_file</code>, <code>edit_file</code>, <code>run_command</code>) and cannot execute anything on the slot itself.</p>
+<h2>Run the terminal</h2>
+<p>Install Google's <code>agy</code> on this Mac and pair it with your private slot once:</p>
 <pre>./laptop/ccfleet pair gemini
-./laptop/ccfleet gemini --native-check --project /path/to/your/repo</pre>
-<p>Replace the path with an existing local directory. If you have several slots, specify the intended paired slot with <code>--slot</code>. In agy, trust the disposable folder, allow the marker read if prompted, accept <code>approved.txt</code>, allow <code>git rev-parse --show-toplevel</code>, and reject <code>denied.txt</code>. Expect <code>PASS</code> only after the slot receives the denial. A timed-out or interrupted run ends and can be restarted in a fresh fixture. This preview was exercised with agy 1.5.14.</p>
-<h2>Test both roles locally</h2>
-<pre>python3 ccfleet_agent/gemini_native_check.py loopback .</pre>
-<p>This mode uses a local pipe. Use the paired command above to test ccfleet.io. This preview verifies tool execution and permissions. A successful run does not establish support for consumer-plan headless wrappers. See <a href="https://antigravity.google/docs/faq/">Google’s Antigravity FAQ</a>.</p>
+./laptop/ccfleet gemini --native --project /path/to/your/repo</pre>
+<p>Inside the stock Antigravity interface, review each operation as it arrives: allow a read, accept or reject an edit, allow a command. A rejection keeps the file unchanged, and the slot receives the denial in the same remote conversation. Turns are transcript-verified, interruptions release the held call, and a repeated request replays the recorded result instead of re-running anything.</p>
+<h2>Scripted verification</h2>
+<p>The signed <code>--native-check</code> command remains available: it exercises four fixed operations with deterministic model responses and consumes no Google model credits. Its model responses are scripted; a successful run does not by itself establish support for consumer-plan headless wrappers.</p>
+<h2>Consumer-plan risk — read this</h2>
+<p>Google's Antigravity FAQ and Terms of Service prohibit third-party wrappers on consumer plans (“Using third-party software, tools, or services to access Antigravity is a violation of our Terms of Service”; “Wrapping <code>agy</code> inside third-party coding agents or applications … is not supported under consumer plans”). Using this terminal on a Pro/Ultra account can put that account at risk, including suspension. The operator accepted that risk for the internal alpha, one person per account and no pooling, and this disclosure travels with the feature; a separately billed Gemini API backend is the compliant alternative.</p>
+<p>Exercised with <code>agy</code> 1.5.14 and 1.5.16 on macOS: the four operations plus denial propagation pass over the two-CLI bridge with real subscription inference (2026-11-24).</p>
 </html>

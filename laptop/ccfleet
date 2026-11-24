@@ -1401,6 +1401,7 @@ WORKSPACE_EXECUTABLE_HASH = "787fd61a76db66b34efd3ee5cefa94dc6dd288cafa222499245
 
 
 NATIVE_CHECK_HASH = "e5fed949241811152e371158645b99c832c47a57575bb2d6098e2cf213ffb682"
+NATIVE_TERMINAL_HASH = "89adef48fbb4994443d90384173b1848a05852221171dbcc76a3abb2a244b0fd"
 PREVIEW_COMPONENT_HASH = "3b3ab6584180bae7ef3b2942ed9782162dac0fac99ce2717b6db5fd559373a73"
 WORKSPACE_TOOLS_HASH = "8083d29214ee5819b28e459470e746b75601552baaf5fb4dfe642a63516587b3"
 EDITOR_CLIENT_HASH = "3dd1e095d41d26a3b4e39acd0bbcd4fd461b05a16170139c2e6c6ac4bab0d18b"
@@ -1663,6 +1664,8 @@ def cmd_gemini(args: argparse.Namespace) -> int:
         raise CliError("the Gemini local editor currently requires macOS")
     if getattr(args, "native_check", False) and runner:
         raise CliError("--native-check uses a fixed Git command")
+    if getattr(args, "native", False) and runner:
+        raise CliError("--native is an interactive terminal")
     if args.preview and runner:
         raise CliError("--test is available in an interactive Gemini session")
     if not acp:
@@ -1671,6 +1674,8 @@ def cmd_gemini(args: argparse.Namespace) -> int:
         if args.pair or not load_config()["devices"]:
             if getattr(args, "native_check", False) and not args.pair:
                 raise CliError("Pair this client with ccfleet pair gemini before running --native-check")
+            if getattr(args, "native", False) and not args.pair:
+                raise CliError("Pair this client with ccfleet pair gemini before using --native")
             if acp:
                 raise CliError("this Mac has no Gemini workspace pairing. In a terminal, run "
                                "ccfleet pair gemini, then reconnect T3")
@@ -1688,6 +1693,16 @@ def cmd_gemini(args: argparse.Namespace) -> int:
                 probe.run(binary, project, [*transport, "ccfleet-gemini-native-check-v1"])
             except (OSError, EOFError, ValueError, subprocess.SubprocessError) as exc:
                 raise CliError(f"Native verification stopped: {exc}") from None
+            return 0
+        if getattr(args, "native", False):
+            terminal = packaged_helper("gemini_native_terminal", NATIVE_TERMINAL_HASH)
+            binary = installed_agent("agy")
+            if not binary:
+                raise CliError("Install Google's agy CLI on this Mac to use the native terminal")
+            try:
+                terminal.run(binary, project, [*transport, "ccfleet-gemini-native-v1"])
+            except (OSError, EOFError, ValueError, subprocess.SubprocessError) as exc:
+                raise CliError(f"The native terminal stopped: {exc}") from None
             return 0
         if not args.preview:
             editor = slot_component("gemini_editor_client", EDITOR_CLIENT_HASH, "editor-client",
@@ -4165,6 +4180,8 @@ def parser() -> argparse.ArgumentParser:
                              help="serve T3 Code's Local ACP command over stdin and stdout")
     gemini_mode.add_argument("--native-check", action="store_true",
                              help="verify two stock agy processes with native local review")
+    gemini_mode.add_argument("--native", action="store_true",
+                             help="run stock agy with the model session on your paired slot")
     gemini_mode.add_argument("--preview", action="store_true",
                              help="verify a synthetic edit without model billing")
     gemini_mode.add_argument("--full-access", action="store_true",
