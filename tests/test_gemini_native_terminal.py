@@ -483,3 +483,27 @@ def test_endpoint_requires_the_loopback_key():
         reply = good.getresponse()
         assert reply.status == 200
         assert terminal.AUX_TEXT in reply.read().decode()
+
+
+def test_manifest_installed_terminal_runs_without_component_download(tmp_path, monkeypatch):
+    from ccfleet_agent import client_release
+
+    cli = runpy.run_path(str(ROOT / "laptop/ccfleet"))
+    component = cli["slot_component"]
+    scope = component.__globals__
+    monkeypatch.setenv("CCFLEET_HOME", str(tmp_path))
+    def missing(*_):
+        raise cli["CliError"]("no adjacent component in legacy manifest")
+    monkeypatch.setitem(scope, "packaged_helper", missing)
+    monkeypatch.setitem(scope, "client_release", lambda: client_release)
+    monkeypatch.setitem(scope, "client_experience", lambda: pytest.fail("unexpected slot fetch"))
+    digest = cli["NATIVE_TERMINAL_HASH"]
+    mod = component("gemini_native_terminal", digest, "native-terminal", [])
+    cached = Path(mod.__file__)
+    assert cached.read_bytes() == (ROOT / "ccfleet_agent/gemini_native_terminal.py").read_bytes()
+    assert hashlib.sha256(cached.read_bytes()).hexdigest() == digest and callable(mod.run)
+    cached.unlink()
+    monkeypatch.setitem(scope, "NATIVE_TERMINAL_RESOURCE", b"YmFk")
+    with pytest.raises(cli["CliError"], match="checksum mismatch"):
+        component("gemini_native_terminal", digest, "native-terminal", [])
+    assert not cached.exists()
