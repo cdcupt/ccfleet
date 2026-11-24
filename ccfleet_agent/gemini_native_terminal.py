@@ -75,6 +75,30 @@ def require(condition: Any, message: str) -> None:
         raise ValueError(message)
 
 
+def diagnostic_path() -> Optional[Path]:
+    """Where ``CCFLEET_NATIVE_DEBUG`` sends diagnostics, or None when disabled."""
+    value = os.environ.get("CCFLEET_NATIVE_DEBUG", "")
+    if not value:
+        return None
+    if value == "1":
+        return Path(tempfile.gettempdir()) / "ccfleet-native-debug.log"
+    return Path(value)
+
+
+def diagnostic(message: str) -> None:
+    """Record a diagnostic off the terminal.
+
+    The watchdog counts down in real time, so a diagnostic must never wait on a
+    terminal whose reader has stopped draining it.
+    """
+    target = diagnostic_path()
+    if target is None:
+        return
+    with contextlib.suppress(OSError):
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(f"{time.time():.3f} {message}\n")
+
+
 def frame(out: Any, data: dict) -> None:
     raw = json.dumps(data, ensure_ascii=False, allow_nan=False).encode()
     require(0 < len(raw) <= LIMIT, "frame too large")
@@ -226,7 +250,7 @@ def endpoint(dispatch: Any):
                 self.end_headers()
                 self.wfile.write(payload)
             except (ValueError, OSError, KeyError, TypeError, EOFError, queue.Empty) as exc:
-                if os.environ.get("CCFLEET_NATIVE_DEBUG"):
+                if diagnostic_path() is not None:
                     print(f"native terminal request failed: {exc}", file=sys.stderr, flush=True)
                 with contextlib.suppress(OSError):
                     self.send_error(400, "The native terminal request could not complete.")
@@ -377,6 +401,10 @@ class Session:
         with self.state_lock:
             pending = dict(self.pending) if self.pending else None
             seen = dict(self.denial) if self.denial else None
+        diagnostic(
+            f"tick: pending={bool(pending)} seen={bool(seen)} "
+            f"grace={time.time() - seen['at'] if seen else 0:.1f}"
+        )
         if pending is None:
             with self.state_lock:
                 self.denial = None
@@ -388,6 +416,7 @@ class Session:
             return
         if seen is None or seen["call"] != pending["call"]:
             error = self._denial(pending)
+            diagnostic(f"watchdog: call {pending['call'][:8]} denial={bool(error)}")
             if error:
                 with self.state_lock:
                     self.denial = {"call": pending["call"], "error": error, "at": time.time()}
@@ -403,6 +432,7 @@ class Session:
             if not pending or pending["call"] != call_id:
                 return
             self.pending = None
+        diagnostic(f"watchdog: releasing {call_id[:8]} with {message[:40]!r}")
         with contextlib.suppress(OSError, ValueError):
             self.send({"turn": pending["turn"], "call": pending["call"], "error": message})
 
@@ -424,21 +454,24 @@ class Session:
             entries = [json.loads(line) for line in newest[1].read_bytes().splitlines()]
         except (OSError, ValueError):
             return None
-        # The transcript keeps every earlier turn, so only entries recorded after
-        # this call was issued may describe its outcome.
-        fresh = [entry for entry in entries if entry_time(entry) >= pending["at"] - 5]
         name, args = pending["name"], pending["args"]
-        for before, after in zip(fresh, fresh[1:]):
+        for before, after in reversed(list(zip(entries, entries[1:]))):
             calls = before.get("tool_calls", [])
             if len(calls) != 1 or calls[0].get("name") != name or calls[0].get("args") != args:
                 continue
             error = str(after.get("error", ""))
-            if (
+            if not (
                 after.get("status") == "ERROR"
                 and after.get("step_index") == before.get("step_index", -2) + 1
                 and DENIAL.search(error)
             ):
-                return error
+                continue
+            # Freshness belongs to the outcome: a call entry is stamped when its model
+            # turn started, which predates the local response by the remote's thinking
+            # time, so only a denial recorded after this operation was issued describes it.
+            if entry_time(after) < pending["at"] - 5:
+                return None
+            return error
         return None
 
     # --- model endpoint --------------------------------------------------
