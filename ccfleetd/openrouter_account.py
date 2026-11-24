@@ -2,15 +2,78 @@
 
 from __future__ import annotations
 
+import re
+import secrets
+import threading
+import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from decimal import Decimal
 from html import escape
 from typing import Any, Optional
 
-from . import usersite, wallet, wallet_routes
+from . import sessions, usersite, wallet, wallet_routes
 from .bilingual import bi, label
 from .openrouter import PAGE
+
+REQUEST_ID_RE = re.compile(r"[A-Za-z0-9_-]{16,64}\Z")
+
+
+class OneTimeRevealStore:
+    """Process-memory-only, session-bound one-time reveal buffer for newly issued keys."""
+
+    def __init__(self, *, ttl_s: float = 120.0, max_entries: int = 512) -> None:
+        self._lock = threading.Lock()
+        self._ttl_s = ttl_s
+        self._max_entries = max_entries
+        self._entries: dict[tuple[str, str], tuple[str, float]] = {}
+
+    def _prune(self, now: float) -> None:
+        expired = [k for k, (_, exp) in self._entries.items() if exp <= now]
+        for k in expired:
+            self._entries.pop(k, None)
+        while len(self._entries) > self._max_entries:
+            self._entries.pop(next(iter(self._entries)), None)
+
+    def put(self, session_id: str, account_id: str, token: str,
+            *, now: Optional[float] = None) -> None:
+        if not session_id or not account_id or not token:
+            return
+        ts = time.monotonic() if now is None else now
+        key = (sessions.hash_session_id(session_id), account_id)
+        with self._lock:
+            self._prune(ts)
+            self._entries.pop(key, None)
+            self._entries[key] = (token, ts + self._ttl_s)
+            self._prune(ts)
+
+    def pop(self, session_id: str, account_id: str,
+            *, now: Optional[float] = None) -> Optional[str]:
+        if not session_id or not account_id:
+            return None
+        ts = time.monotonic() if now is None else now
+        key = (sessions.hash_session_id(session_id), account_id)
+        with self._lock:
+            self._prune(ts)
+            entry = self._entries.pop(key, None)
+        if entry is None or entry[1] <= ts:
+            return None
+        return entry[0]
+
+    def clear_account(self, account_id: str) -> None:
+        if not account_id:
+            return
+        with self._lock:
+            for key in [k for k in self._entries if k[1] == account_id]:
+                self._entries.pop(key, None)
+
+    def clear_session(self, session_id: str) -> None:
+        if not session_id:
+            return
+        sh = sessions.hash_session_id(session_id)
+        with self._lock:
+            for key in [k for k in self._entries if k[0] == sh]:
+                self._entries.pop(key, None)
 
 ENTRY_CSS = """
 .or-entry{margin:20px 0;padding:24px 28px;border:1px solid var(--rule);border-radius:var(--radius);
@@ -95,12 +158,19 @@ background:var(--acc-soft);font-size:13px;line-height:1.68;color:var(--ink)}
 .or-sheet{overflow-x:auto;max-width:100%;min-width:0;border:1px solid var(--rule-soft);
 border-radius:12px}
 .or-table{width:100%;min-width:440px;border-collapse:collapse;font-size:13px}
+.or-table.or-receipt-table{min-width:580px}
 .or-table th,.or-table td{padding:11px 14px;text-align:left;vertical-align:top;
 border-bottom:1px solid var(--rule-soft);white-space:normal}
-.or-table th{font-size:12px;font-weight:620;color:var(--muted);background:var(--surface-subtle)}
+.or-table th{font-size:12px;font-weight:620;color:var(--muted);background:var(--surface-subtle);
+white-space:nowrap}
 .or-table tr:last-child td{border-bottom:0}
 .or-table th.num,.or-table td.num{text-align:right;font-variant-numeric:tabular-nums;
 white-space:nowrap}
+.or-table td.or-col-time{white-space:nowrap;font-variant-numeric:tabular-nums;
+color:var(--muted);font-size:12.5px}
+.or-table td.or-col-req{min-width:180px}
+.or-table td.or-col-status{white-space:nowrap}
+.or-table td.or-col-charge{white-space:normal}
 .or-table .pill{white-space:nowrap}
 .or-model-cell{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px}
 .or-model-cell code{font-size:12.5px;overflow-wrap:anywhere}
@@ -117,11 +187,36 @@ background:var(--surface-subtle);min-width:0}
 .or-stat-label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:4px}
 .or-stat-value{display:block;font-family:var(--serif);font-size:24px;font-weight:500;
 line-height:1.15;letter-spacing:-.02em;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
-.or-req-id{display:block;margin-top:3px;font-size:11.5px;color:var(--muted);
-font-family:var(--mono);overflow-wrap:anywhere}
+.or-req-id{display:inline-block;font-size:11.5px;color:var(--muted);background:transparent;
+padding:0;border:0;font-family:var(--mono);overflow-wrap:anywhere}
 .or-billing-detail{display:grid;gap:2px;justify-items:end;text-align:right;
 font-variant-numeric:tabular-nums}
-.or-billing-detail small{font-size:11.5px;color:var(--muted)}
+.or-billing-detail strong{white-space:nowrap}
+.or-billing-detail small{font-size:11.5px;color:var(--muted);line-height:1.45;
+white-space:normal}
+.or-usage-groups{display:grid;gap:10px}
+.or-usage-group{border:1px solid var(--rule-soft);border-radius:12px;background:var(--panel);
+overflow:hidden}
+.or-group-head{list-style:none;display:flex;flex-wrap:wrap;align-items:center;
+justify-content:space-between;gap:10px 16px;padding:13px 16px;cursor:pointer;
+transition:background-color .15s var(--ease)}
+.or-group-head::-webkit-details-marker{display:none}
+.or-group-head::marker{content:""}
+.or-group-head:hover{background:var(--surface-subtle)}
+.or-usage-group[open]>.or-group-head{background:var(--surface-subtle);
+border-bottom:1px solid var(--rule-soft)}
+.or-group-main{display:grid;gap:6px;min-width:0;flex:1 1 280px}
+.or-group-top{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;min-width:0}
+.or-group-top code{font-size:12.5px;overflow-wrap:anywhere}
+.or-group-day{display:inline-flex;align-items:center;font-size:12px;font-weight:650;
+color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap}
+.or-group-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;
+font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.or-group-right{display:flex;align-items:center;gap:12px;margin-left:auto}
+.or-group-chevron{color:var(--muted);font-size:16px;line-height:1;
+transition:transform .18s var(--ease);flex:none}
+.or-usage-group[open] .or-group-chevron{transform:rotate(90deg);color:var(--acc)}
+.or-group-body .or-sheet{border:0;border-radius:0}
 .or-empty{padding:26px 20px;border:1px dashed var(--rule);border-radius:12px;
 background:var(--surface-subtle);text-align:center;display:grid;gap:6px;justify-items:center}
 .or-empty strong{font-size:14.5px;color:var(--ink)}
@@ -166,7 +261,11 @@ background:var(--surface-subtle)}
 .or-key-actions{align-items:stretch}
 .or-key-actions form,.or-key-actions .btn{width:100%}
 .or-table{min-width:380px}
-.or-table th,.or-table td{padding:10px 10px}}
+.or-table.or-receipt-table{min-width:540px}
+.or-table th,.or-table td{padding:10px 10px}
+.or-group-head{padding:12px 14px}
+.or-group-right{width:100%;justify-content:space-between;margin-left:0}
+.or-group-right .or-billing-detail{justify-items:start;text-align:left}}
 @media(prefers-reduced-motion:reduce){.or-entry,.or-issued,.or-card,.or-balance-card{
 animation:none!important}}
 """
@@ -223,14 +322,20 @@ def _rate_usd(amount: Decimal) -> str:
     return f"${normalized}"
 
 
-def _utc_time(ts: Any) -> str:
+def _utc_moment(ts: Any) -> Optional[datetime]:
     try:
-        moment = datetime.fromtimestamp(float(ts), tz=timezone.utc)
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc)
     except (ValueError, TypeError, OverflowError, OSError):
+        return None
+
+
+def _utc_time(ts: Any) -> str:
+    moment = _utc_moment(ts)
+    if moment is None:
         return "—"
     iso = moment.strftime("%Y-%m-%dT%H:%M:%SZ")
     text = moment.strftime("%Y-%m-%d %H:%M UTC")
-    return f'<time data-local datetime="{iso}">{text}</time>'
+    return f'<time data-local="datetime" datetime="{iso}" title="{text}">{text}</time>'
 
 
 def _code_box(title_en: str, title_zh: str, content: str, *,
@@ -396,7 +501,7 @@ def _model_rows(ordered_models: list[str], recent_set: set[str],
     )
 
 
-def _receipt_rows(receipts: list[dict[str, Any]]) -> str:
+def _receipt_table(receipts: list[dict[str, Any]]) -> str:
     rows = []
     for row in receipts:
         cost = row["cost_usd"]
@@ -443,10 +548,8 @@ def _receipt_rows(receipts: list[dict[str, Any]]) -> str:
                 + "</span>"
             )
             billing = (
-                '<div class="or-billing-detail"><strong>'
-                + label("Fleet wallet charge", "Fleet 余额扣费", inline=True)
-                + " $0.00</strong><small>"
-                + label("OpenRouter usage ", "OpenRouter 用量费 ", inline=True)
+                '<div class="or-billing-detail"><strong>$0.00</strong><small>'
+                + label("Usage ", "用量费 ", inline=True)
                 + cost_fmt
                 + " · "
                 + label("Admin covered", "管理员覆盖", inline=True)
@@ -473,24 +576,22 @@ def _receipt_rows(receipts: list[dict[str, Any]]) -> str:
                 + "</small></div>"
             )
         rows.append(
-            "<tr><td>"
+            '<tr><td class="or-col-time">'
             + _utc_time(row.get("created_at"))
-            + "</td><td><code>"
-            + escape(row["model"])
-            + '</code><span class="or-req-id">'
-            + label("Request ", "请求 ", inline=True)
+            + '</td><td class="or-col-req"><code class="or-req-id">'
             + escape(row["id"])
-            + "</span></td><td>"
+            + '</code></td><td class="or-col-status">'
             + badge
-            + '</td><td class="num">'
+            + '</td><td class="num or-col-charge">'
             + billing
             + "</td></tr>"
         )
     return (
-        '<div class="or-sheet"><table class="or-table"><thead><tr><th scope="col">'
+        '<div class="or-sheet"><table class="or-table or-receipt-table"><thead><tr>'
+        '<th scope="col">'
         + label("Time", "时间", inline=True)
         + '</th><th scope="col">'
-        + label("Model & request", "模型与请求", inline=True)
+        + label("Request", "请求 ID", inline=True)
         + '</th><th scope="col">'
         + label("Status", "状态", inline=True)
         + '</th><th scope="col" class="num">'
@@ -499,6 +600,152 @@ def _receipt_rows(receipts: list[dict[str, Any]]) -> str:
         + "".join(rows)
         + "</tbody></table></div>"
     )
+
+
+def _receipt_groups(receipts: list[dict[str, Any]]) -> tuple[str, int]:
+    """Group recent per-request receipts by UTC day and model for clean scanning."""
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in receipts:
+        moment = _utc_moment(row.get("created_at"))
+        day = moment.strftime("%Y-%m-%d") if moment is not None else "—"
+        grouped.setdefault((day, row["model"]), []).append(row)
+
+    blocks = []
+    auto_open_first = len(receipts) <= 5
+    for idx, ((day, model), items) in enumerate(grouped.items()):
+        count = len(items)
+        settled_n = sum(1 for r in items if r["state"] == "settled")
+        pending_n = sum(1 for r in items if r["state"] in ("held", "submitted"))
+        released_n = sum(1 for r in items if r["state"] == "released")
+        usage_usd = sum(
+            (Decimal(r["cost_usd"]) for r in items if r["cost_usd"] is not None),
+            Decimal(0),
+        )
+        fee_usd = sum(
+            (Decimal(r["fee_usd"]) for r in items
+             if r["cost_usd"] is not None and not r["wallet_exempt"]),
+            Decimal(0),
+        )
+        hold_cents = sum(
+            int(r.get("hold_cents") or 0) for r in items
+            if r["state"] in ("held", "submitted") and not r["wallet_exempt"]
+        )
+        all_exempt = all(bool(r["wallet_exempt"]) for r in items)
+
+        moments = [m for m in (_utc_moment(r.get("created_at")) for r in items) if m is not None]
+        if len(moments) == 1:
+            span_html = _utc_time(items[0].get("created_at"))
+        elif len(moments) > 1:
+            first_t = min(moments).strftime("%H:%M")
+            last_t = max(moments).strftime("%H:%M")
+            span_text = f"{first_t}–{last_t} UTC" if first_t != last_t else f"{last_t} UTC"
+            span_html = f"<span>{escape(span_text)}</span>"
+        else:
+            span_html = "<span>—</span>"
+
+        pills = []
+        if settled_n == count:
+            pills.append(
+                '<span class="pill ok">'
+                + label("Settled", "已结算", inline=True)
+                + "</span>"
+            )
+        else:
+            if settled_n:
+                pills.append(
+                    '<span class="pill ok">'
+                    + label(f"{settled_n} settled", f"{settled_n} 已结算", inline=True)
+                    + "</span>"
+                )
+            if pending_n:
+                pills.append(
+                    '<span class="pill warn">'
+                    + label(f"{pending_n} reserved", f"{pending_n} 已预留", inline=True)
+                    + "</span>"
+                )
+            if released_n:
+                pills.append(
+                    '<span class="pill disabled">'
+                    + label(f"{released_n} released", f"{released_n} 已解除", inline=True)
+                    + "</span>"
+                )
+
+        if all_exempt:
+            if settled_n:
+                sub_html = (
+                    label("Usage ", "用量费 ", inline=True)
+                    + _usd(usage_usd)
+                    + " · "
+                    + label("Admin covered", "管理员覆盖", inline=True)
+                )
+            elif pending_n:
+                sub_html = label("Admin covered · pending", "管理员覆盖 · 结算中", inline=True)
+            else:
+                sub_html = label("Hold released", "预留已退回", inline=True)
+            charge_html = (
+                '<div class="or-billing-detail"><strong>$0.00</strong>'
+                f"<small>{sub_html}</small></div>"
+            )
+        elif settled_n:
+            sub_html = (
+                label("Usage ", "用量费 ", inline=True)
+                + _usd(usage_usd)
+                + " + "
+                + label("5% fee ", "5% 服务费 ", inline=True)
+                + _usd(fee_usd)
+            )
+            if hold_cents:
+                sub_html += (
+                    " · "
+                    + label("Reserved ", "已预留 ", inline=True)
+                    + wallet.display(hold_cents)
+                )
+            charge_html = (
+                f'<div class="or-billing-detail"><strong>{_usd(usage_usd + fee_usd)}'
+                f"</strong><small>{sub_html}</small></div>"
+            )
+        elif pending_n:
+            charge_html = (
+                '<div class="or-billing-detail"><strong>'
+                + label("Reserved ", "已预留 ", inline=True)
+                + wallet.display(hold_cents)
+                + "</strong><small>"
+                + label("Awaiting final cost", "等待最终费用结算", inline=True)
+                + "</small></div>"
+            )
+        else:
+            charge_html = (
+                '<div class="or-billing-detail"><strong>$0.00</strong><small>'
+                + label("Hold released", "预留已退回", inline=True)
+                + "</small></div>"
+            )
+
+        day_label = f"{day} UTC" if day != "—" else "—"
+        count_tag = label(
+            f"{count} request" if count == 1 else f"{count} requests",
+            f"{count} 次请求",
+            inline=True,
+        )
+        open_attr = " open" if (auto_open_first and idx == 0) else ""
+        blocks.append(
+            f'<details class="or-usage-group"{open_attr}>'
+            '<summary class="or-group-head">'
+            '<div class="or-group-main">'
+            '<div class="or-group-top">'
+            f'<span class="or-group-day">{escape(day_label)}</span>'
+            f"<code>{escape(model)}</code>"
+            f'<span class="or-tag">{count_tag}</span>'
+            "</div>"
+            '<div class="or-group-meta">'
+            f"{span_html}{''.join(pills)}"
+            "</div></div>"
+            '<div class="or-group-right">'
+            f'{charge_html}<span class="or-group-chevron" aria-hidden="true">▸</span>'
+            "</div></summary>"
+            f'<div class="or-group-body">{_receipt_table(items)}</div>'
+            "</details>"
+        )
+    return '<div class="or-usage-groups">' + "".join(blocks) + "</div>", len(blocks)
 
 
 def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
@@ -541,9 +788,11 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
     )
 
     def _action_form(action: str, en: str, zh: str, btn_cls: str) -> str:
+        req_id = secrets.token_urlsafe(18)
         return (
             f'<form method="post" action="{PAGE}/{action}">'
             f'<input type="hidden" name="csrf" value="{csrf}">'
+            f'<input type="hidden" name="request_id" value="{req_id}">'
             f'<button class="btn {btn_cls}" type="submit">'
             + label(en, zh, inline=True)
             + "</button></form>"
@@ -567,10 +816,10 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
             + label("Save your private Fleet key now", "请立即保存你的个人 Fleet 密钥", inline=True)
             + "</h2></div><p>"
             + label(
-                "This key is only shown on this non-cached response. Refreshing or leaving this "
-                "page hides it permanently. Any previous OpenRouter key for this account has "
-                "already been replaced.",
-                "此密钥仅在本次不缓存的页面响应中显示一次。刷新或离开此页面后将无法再次查看。"
+                "This key is shown once on this non-cached page. Refreshing or leaving this "
+                "page hides it while keeping the key valid. Any previous OpenRouter key for "
+                "this account has already been replaced.",
+                "此密钥仅在本次不缓存的页面中显示一次。刷新或离开此页面后会隐藏密钥，但密钥仍然有效。"
                 "此账户先前的 OpenRouter 密钥已立即失效。",
                 inline=True,
             )
@@ -878,6 +1127,14 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
         else:
             charged_stat = wallet.display(wallet_debited_cents)
             charged_lbl = label("Fleet wallet debited", "Fleet 余额实扣", inline=True)
+        grouped_html, group_count = _receipt_groups(receipts)
+        req_word = "request" if len(receipts) == 1 else "requests"
+        grp_word = "group" if group_count == 1 else "groups"
+        receipts_meta = label(
+            f"{len(receipts)} {req_word} · {group_count} {grp_word} (latest 50)",
+            f"共 {len(receipts)} 条请求 · 已归为 {group_count} 组（最近 50 条）",
+            inline=True,
+        )
         receipts_inner = (
             '<div class="or-stats">'
             '<div class="or-stat"><span class="or-stat-label">'
@@ -890,9 +1147,10 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
             + charged_lbl
             + f'</span><strong class="or-stat-value">{charged_stat}</strong></div>'
             "</div>"
-            + _receipt_rows(receipts)
+            + grouped_html
         )
     else:
+        receipts_meta = label("Latest 50 requests", "最近 50 条记录", inline=True)
         receipts_inner = (
             '<div class="or-empty"><strong>'
             + label("No OpenRouter requests yet", "暂无 OpenRouter 请求记录", inline=True)
@@ -911,9 +1169,7 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
         '<section class="or-card" id="openrouter-receipts">'
         '<div class="or-card-head"><h2>'
         + label("Recent usage", "最近用量", inline=True)
-        + '</h2><span class="or-note">'
-        + label("Latest 50 requests", "最近 50 条记录", inline=True)
-        + "</span></div>"
+        + f'</h2><span class="or-note">{receipts_meta}</span></div>'
         + receipts_inner
         + "</section>"
     )

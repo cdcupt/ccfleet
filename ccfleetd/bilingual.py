@@ -15,7 +15,7 @@ CURRENT_PAGES = frozenset({
     '/account/usage', '/account/available', '/account/purchase',
     '/account/renew',
     '/account/topup', '/account/subscribe', '/account/subscriptions', '/account/devin-trial',
-    '/account/openrouter',
+    '/account/openrouter', '/account/openrouter/create', '/account/openrouter/revoke',
     '/privacy', '/status', '/docs', '/docs/guide',
     '/docs/how-it-works', '/docs/terms', '/docs/library', '/docs/library/',
     '/docs/library/docs/index.html', '/docs/library/docs/public-gateway.html',

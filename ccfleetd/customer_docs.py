@@ -145,7 +145,11 @@ padding:6px 18px 14px;background:var(--surface-subtle);min-width:0}
 .doc-table-scroll{max-width:100%;min-width:0;overflow-x:auto;margin:18px 0;
 border:1px solid var(--rule);border-radius:var(--radius-md);background:var(--panel)}
 .doc-table-scroll table{min-width:620px;font-size:14px}
-.doc-table-scroll th,.doc-table-scroll td{white-space:normal;overflow-wrap:anywhere}
+.doc-table-scroll th,.doc-table-scroll td{white-space:normal;overflow-wrap:break-word}
+.doc-table-scroll thead th{background:var(--surface-subtle);font-size:12px;color:var(--muted);
+white-space:nowrap}
+.doc-table-scroll tbody th{background:none;color:var(--ink);font-size:13.5px;font-weight:640;
+text-transform:none;letter-spacing:0;white-space:nowrap}
 .doc .card .bi h2:first-child,.how .card .bi h2:first-child{margin-top:20px}
 .doc .bi p,.how .bi p{overflow-wrap:anywhere}
 .hero .bi>.copy-en+.copy-zh h1{font-family:var(--sans);font-size:clamp(30px,4vw,44px);

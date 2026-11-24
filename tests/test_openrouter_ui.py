@@ -149,10 +149,17 @@ def test_openrouter_page_key_lifecycle_models_cli_and_receipts(router, locale):
     ) in initial.body
     assert "sk-or-" not in initial.body
 
-    # 2. Issue key -> shown ONCE, progressive Copy button present, language switcher safe
+    # 2. Issue key -> 303 PRG redirect to /account/openrouter, shown ONCE, Copy button present
     create_action = ("/zh" if locale == "zh" else "") + "/account/openrouter/create"
     form = form_from(initial.body, create_action)
-    created = user.call("POST", prefix + "/account/openrouter/create", form=form, headers=c.public)
+    assert "request_id" in form and len(form["request_id"]) >= 16
+    post_created = user.call(
+        "POST", prefix + "/account/openrouter/create", form=form, headers=c.public
+    )
+    assert post_created.status == 303
+    assert post_created.getheader("Cache-Control") == "no-store"
+    assert post_created.getheader("Location") == prefix + "/account/openrouter"
+    created = user.call("GET", post_created.getheader("Location"), headers=c.public)
     assert created.status == 200
     assert created.getheader("Cache-Control") == "no-store"
     _assert_csp_and_locale(created, locale)
@@ -160,7 +167,7 @@ def test_openrouter_page_key_lifecycle_models_cli_and_receipts(router, locale):
     assert "data-copy-code" in created.body
     assert ("已生成新密钥" if locale == "zh" else "New key issued") in created.body
     assert "/account/openrouter/create" in created.body
-    # Switch-language link on POST response must point to safe GET /account/openrouter
+    # Switch-language link on landed GET page points cleanly to the other locale
     other_prefix = "/en" if locale == "zh" else "/zh"
     assert f'href="{other_prefix}/account/openrouter"' in created.body
 
@@ -193,9 +200,14 @@ def test_openrouter_page_key_lifecycle_models_cli_and_receipts(router, locale):
     assert ("已预留" if locale == "zh" else "Reserved") in after.body
     assert ("已解除预留" if locale == "zh" else "Released") in after.body
 
-    # 4. Revoke key -> back to No active key
+    # 4. Revoke key -> 303 PRG redirect back to No active key
     revoke_form = {"csrf": usersite.csrf_for(user.session, c.cfg.cookie_secret)}
-    revoked = user.call("POST", prefix + "/account/openrouter/revoke", form=revoke_form, headers=c.public)
+    post_revoked = user.call(
+        "POST", prefix + "/account/openrouter/revoke", form=revoke_form, headers=c.public
+    )
+    assert post_revoked.status == 303
+    assert post_revoked.getheader("Location") == prefix + "/account/openrouter"
+    revoked = user.call("GET", post_revoked.getheader("Location"), headers=c.public)
     assert revoked.status == 200
     _assert_csp_and_locale(revoked, locale)
     assert ("尚无有效密钥" if locale == "zh" else "No active key") in revoked.body
@@ -289,4 +301,34 @@ def test_openrouter_first_party_docs_and_guide_reflect_026_and_027(router, local
                 "/model",
             ):
                 assert marker in resp.body, f"Missing {marker!r} on {prefix + path}"
+
+
+@pytest.mark.parametrize("locale", ["en", "zh"])
+def test_openrouter_recent_usage_gathers_many_receipts_with_clean_timestamps(router, locale):
+    c = router
+    prefix = "/" + locale
+    grant(c, "20")
+    key = c.store.openrouter_key("alice")
+    now = 1_763_980_000.0
+    for idx in range(16):
+        day_offset = 0 if idx < 8 else 86400
+        model = MODELS[idx % 2]
+        rid = c.store.openrouter_reserve("alice", key, model, 50)
+        with c.store._write_txn() as db:
+            db.execute(
+                "UPDATE openrouter_requests SET created_at=? WHERE id=?",
+                (now - day_offset - idx * 300, rid),
+            )
+        c.store.openrouter_submit(rid, "alice", key)
+        c.store.openrouter_identify(rid, f"gen-grp-{idx}")
+        c.store.openrouter_settle(rid, f"gen-grp-{idx}", Decimal("0.01"))
+
+    page = c.browser("alice").call("GET", prefix + "/account/openrouter", headers=c.public)
+    assert page.status == 200
+    _assert_csp_and_locale(page, locale)
+    # 16 receipts across 2 UTC days x 2 models -> 4 collapsed summary groups
+    assert page.body.count('<details class="or-usage-group">') == 4
+    assert '<details class="or-usage-group" open>' not in page.body
+    assert 'data-local="datetime"' in page.body
+    assert ("共 16 条请求 · 已归为 4 组" if locale == "zh" else "16 requests · 4 groups") in page.body
 
