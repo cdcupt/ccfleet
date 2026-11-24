@@ -58,7 +58,8 @@ TURN_WAIT = 3600.0
 DRAIN_WAIT = 300.0
 TURN_LIMIT = "3600s"
 DENIAL_POLL = 1.0
-DENIAL_GRACE = 3.0
+DENIAL_GRACE = 10.0
+DENIAL = re.compile(r"denied permission|permission check failed", re.IGNORECASE)
 TRANSCRIPT_LIMIT = 8 * 1024 * 1024
 REPLAY_LIMIT = 8
 REPLAY_AGE = 300.0
@@ -435,7 +436,7 @@ class Session:
             if (
                 after.get("status") == "ERROR"
                 and after.get("step_index") == before.get("step_index", -2) + 1
-                and "user denied permission" in error
+                and DENIAL.search(error)
             ):
                 return error
         return None
@@ -651,6 +652,7 @@ def run(binary: Any, project: Any, command: list, profile: Optional[Path] = None
             "the paired slot does not offer the native terminal",
         )
         session = Session(relay, project, profile)
+        lost = False
         try:
             with endpoint(session.dispatch) as (url, key), tempfile.TemporaryDirectory(
                 prefix="ccfleet-native-client-", dir="/private/tmp"
@@ -669,11 +671,12 @@ def run(binary: Any, project: Any, command: list, profile: Optional[Path] = None
                                 f"{session.failure or 'no reason was reported'}",
                                 file=sys.stderr,
                             )
+                            lost = True
                             break
                         time.sleep(0.2)
         finally:
             session.close()
-    return 0
+    return 2 if lost else 0
 
 
 def bridge_environment(home: Path, session: Path) -> dict:

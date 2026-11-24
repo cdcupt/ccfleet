@@ -377,6 +377,16 @@ def test_session_releases_a_denied_call_from_the_transcript(tmp_path):
     ]
 
 
+def test_denial_matches_the_recorded_permission_failure_phrasing(tmp_path):
+    write_denial(
+        tmp_path,
+        when=datetime.now(timezone.utc),
+        error='permission check failed for write_file "/x"',
+    )
+    session = terminal.Session(relay(), tmp_path, tmp_path, pump=False)
+    assert session._denial(pending_call()) == 'permission check failed for write_file "/x"'
+
+
 def test_denial_ignores_an_identical_call_from_an_earlier_turn(tmp_path):
     write_denial(tmp_path, when=datetime.now(timezone.utc) - timedelta(hours=1))
     session = terminal.Session(relay(), tmp_path, tmp_path, pump=False)
