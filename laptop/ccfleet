@@ -1685,7 +1685,8 @@ def cmd_gemini(args: argparse.Namespace) -> int:
         transport = ssh_transport_command(device, tty=False, fleet_only=True)
         release_command = [*transport, "ccfleet-gemini-release-v1"]
         if getattr(args, "native_check", False):
-            probe = packaged_helper("gemini_native_check", NATIVE_CHECK_HASH)
+            probe = slot_component("gemini_native_check", NATIVE_CHECK_HASH, "native-check",
+                                   release_command)
             binary = installed_agent("agy")
             if not binary:
                 raise CliError("Install Google's agy CLI on the client Mac to run --native-check")
@@ -1695,7 +1696,8 @@ def cmd_gemini(args: argparse.Namespace) -> int:
                 raise CliError(f"Native verification stopped: {exc}") from None
             return 0
         if getattr(args, "native", False):
-            terminal = packaged_helper("gemini_native_terminal", NATIVE_TERMINAL_HASH)
+            terminal = slot_component("gemini_native_terminal", NATIVE_TERMINAL_HASH,
+                                      "native-terminal", release_command)
             binary = installed_agent("agy")
             if not binary:
                 raise CliError("Install Google's agy CLI on this Mac to use the native terminal")
