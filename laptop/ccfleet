@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.25"
+CLIENT_VERSION = "0.2.26"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -338,59 +338,71 @@ def own_gateway_slots(device: dict[str, Any]) -> list[dict[str, Any]]:
     return slots
 
 
-def load_gateway() -> Optional[dict[str, Any]]:
-    """Keep endpoint secrets out of the pairing config and all diagnostic exports."""
+@contextlib.contextmanager
+def credential_directory(*, create: bool = False):
+    if create:
+        home().mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
-        directory = os.open(home(), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        fd = os.open(home(), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise CliError("Fleet credential directory could not be opened safely") from exc
+    try:
+        info = os.fstat(fd)
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise CliError("Fleet credential directory must be private and owned by this user")
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def read_private_profile(name: str) -> Optional[dict[str, Any]]:
+    try:
+        with credential_directory() as directory:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            with os.fdopen(fd, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                        or info.st_mode & 0o077 or info.st_nlink != 1):
+                    raise CliError("Fleet credential must be a private user-owned file")
+                raw = stream.read(32769)
+            if len(raw) > 32768:
+                raise CliError("Fleet credential file is too large")
+            profile = json.loads(raw)
+            if not isinstance(profile, dict):
+                raise CliError("invalid Fleet credential file")
+            return profile
     except FileNotFoundError:
         return None
-    try:
-        info = os.fstat(directory)
-        if info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise CliError("gateway directory must be private and owned by this user")
-        try:
-            descriptor = os.open("gateway.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
-                                 dir_fd=directory)
-        except FileNotFoundError:
-            return None
-        with os.fdopen(descriptor, "rb") as stream:
-            info = os.fstat(stream.fileno())
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                    or info.st_mode & 0o077 or info.st_nlink != 1):
-                raise CliError("gateway configuration must be a private user-owned file")
-            raw = stream.read(32769)
-        if len(raw) > 32768:
-            raise CliError("gateway configuration is too large")
-        return _gateway_profile(json.loads(raw))
     except (OSError, ValueError) as exc:
-        raise CliError("gateway configuration could not be read safely") from exc
-    finally:
-        os.close(directory)
+        raise CliError("Fleet credential could not be read safely") from exc
+
+
+def write_private_profile(name: str, profile: dict[str, Any]) -> None:
+    with credential_directory(create=True) as directory:
+        temporary = ".credential-" + secrets.token_hex(16)
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=directory)
+        try:
+            with os.fdopen(fd, "w") as stream:
+                json.dump(profile, stream, sort_keys=True)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, name, src_dir_fd=directory, dst_dir_fd=directory)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temporary, dir_fd=directory)
+
+
+def load_gateway() -> Optional[dict[str, Any]]:
+    profile = read_private_profile("gateway.json")
+    return None if profile is None else _gateway_profile(profile)
 
 
 def save_gateway(value: dict[str, Any]) -> None:
-    checked = _gateway_profile(value)
-    if home().is_symlink():
-        raise CliError("gateway directory must not be a symbolic link")
-    home().mkdir(mode=0o700, parents=True, exist_ok=True)
-    directory = os.open(home(), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    temporary = ".gateway-" + secrets.token_hex(16)
-    try:
-        info = os.fstat(directory)
-        if info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise CliError("gateway directory must be private and owned by this user")
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                             0o600, dir_fd=directory)
-        with os.fdopen(descriptor, "w") as stream:
-            json.dump(checked, stream, sort_keys=True)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, "gateway.json", src_dir_fd=directory, dst_dir_fd=directory)
-    finally:
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(temporary, dir_fd=directory)
-        os.close(directory)
+    write_private_profile("gateway.json", _gateway_profile(value))
 
 
 def check_gateway(profile: dict[str, Any], slot_id: str = "", *,
@@ -2884,19 +2896,44 @@ def native_settings(env: dict[str, str], base_url: str, secret: str, *,
     return {"env": pinned, "apiKeyHelper": ""}
 
 
+def openrouter_auth(base: str):
+    """An environment override is ephemeral. Remember only a verified, interactively entered key."""
+    token = os.environ.get("CCFLEET_OPENROUTER_TOKEN", "")
+    saved = None if token else read_private_profile("openrouter.json")
+    if saved is not None:
+        token = saved.get("token")
+
+    def catalog_for(value):
+        if not isinstance(value, str) or not re.fullmatch(r"ccf_or_[A-Za-z0-9_-]{43}", value):
+            raise CliError("enter a Fleet OpenRouter key from your CC Fleet account")
+        return api_json(base + "/v1/models", value, method="GET")
+
+    if token or saved is not None:
+        try:
+            return token, catalog_for(token), False
+        except CliError as exc:
+            if saved is None or exc.status != 401:
+                raise
+            print("The saved Fleet key was rejected. Enter a current key to replace it.",
+                  file=sys.stderr)
+    if not sys.stdin.isatty():
+        raise CliError("run ccfleet openrouter --check in a terminal to save your Fleet key, "
+                       "or set CCFLEET_OPENROUTER_TOKEN for this process")
+    token = getpass.getpass("Fleet key from https://ccfleet.io/account/openrouter: ")
+    return token, catalog_for(token), True
+
+
 def cmd_openrouter(args: argparse.Namespace) -> int:
     """Launch native Claude against the account-funded Fleet endpoint, without a slot."""
+    if args.forget_key:
+        with contextlib.suppress(FileNotFoundError), credential_directory() as directory:
+            os.unlink("openrouter.json", dir_fd=directory)
+        print("Cleared the saved Fleet OpenRouter key on this computer.")
+        return 0
     check_managed_route()
     extra = native_extra_args(args)
     base = DEFAULT_SERVER + "/openrouter"
-    token = os.environ.get("CCFLEET_OPENROUTER_TOKEN", "")
-    if not token:
-        if not sys.stdin.isatty():
-            raise CliError("set CCFLEET_OPENROUTER_TOKEN to your Fleet OpenRouter key")
-        token = getpass.getpass("Fleet key from https://ccfleet.io/account/openrouter: ")
-    if not re.fullmatch(r"ccf_or_[A-Za-z0-9_-]{43}", token):
-        raise CliError("enter a Fleet OpenRouter key from your CC Fleet account")
-    catalog = api_json(base + "/v1/models", token, method="GET")
+    token, catalog, remember = openrouter_auth(base)
     rows = catalog.get("data")
     covered = catalog.get("fleet_billing") == "admin_covered"
     price = "OpenRouter · Fleet $0" if covered else "OpenRouter + 5%"
@@ -2905,6 +2942,9 @@ def cmd_openrouter(args: argparse.Namespace) -> int:
             or any(not isinstance(row, dict) or not isinstance(row.get("id"), str)
                    or not re.fullmatch(pattern, row["id"]) for row in rows)):
         raise CliError("invalid OpenRouter catalog from Fleet")
+    if remember:
+        write_private_profile("openrouter.json", {"token": token})
+        print("Saved your Fleet key for future OpenRouter sessions on this computer.", file=sys.stderr)
     models = [row["id"] for row in rows]
     recent = [row["id"] for row in rows if row.get("fleet_recent") is True]
     model = args.model or models[0]
@@ -2925,6 +2965,10 @@ def cmd_openrouter(args: argparse.Namespace) -> int:
     tiers = {name: model for name in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
             "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
             "ANTHROPIC_DEFAULT_FABLE_MODEL", "ANTHROPIC_SMALL_FAST_MODEL")}
+    # These two offered DeepSeek models share the same OpenRouter context length.
+    # A session-wide override is valid only while every model in its picker matches.
+    if set(models) <= {"deepseek/deepseek-v4.1-flash", "deepseek/deepseek-v4-pro"}:
+        tiers["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "1048576")
     settings["env"].update(tiers)
     env.update(tiers)
     settings["modelPicker"] = {"replaceBuiltInOptions": True, "options": [
@@ -3950,7 +3994,10 @@ def parser() -> argparse.ArgumentParser:
                        help="explicitly approve ending this computer's old live-folder sessions")
     setup.add_argument("--server", default=os.environ.get("CCFLEET_SERVER", DEFAULT_SERVER),
                        help="server used only when pairing a new computer")
-    router = sub.add_parser("openrouter", help="run local Claude with Fleet-billed OpenRouter models")
+    router = sub.add_parser("openrouter", help="run local Claude with Fleet-billed OpenRouter models",
+                            description="Enter a Fleet key once to save it privately on this computer. "
+                                        "CCFLEET_OPENROUTER_TOKEN overrides the saved key for this run.")
+    router.add_argument("--forget-key", action="store_true", help="remove the saved Fleet key from this computer")
     router.add_argument("--model", help="OpenRouter model ID")
     router.add_argument("--check", action="store_true", help="show the default, recent models and full catalog without inference")
     router.add_argument("claude_args", nargs=argparse.REMAINDER)

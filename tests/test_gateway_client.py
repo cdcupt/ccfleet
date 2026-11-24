@@ -624,3 +624,69 @@ def test_openrouter_owner_pricing_from_authenticated_catalog(client, monkeypatch
     assert client.loaded["main"](["openrouter"]) == 0
     assert "Fleet covers" in capsys.readouterr().err
     assert "Fleet $0" in client.calls[0][3]["modelPicker"]["options"][0]["label"]
+
+
+def test_openrouter_saves_after_validation_reuses_and_forgets(client, monkeypatch, capsys):
+    monkeypatch.delenv("CCFLEET_OPENROUTER_TOKEN", raising=False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    token = "ccf_or_" + "a" * 43
+    prompts = []
+    def prompt(_):
+        prompts.append(True)
+        return token
+    monkeypatch.setattr(client.loaded["getpass"], "getpass", prompt)
+    catalog = {"data": [{"id": "deepseek/deepseek-v4.1-flash"}]}
+    calls = []
+    def api(url, key, method):
+        calls.append((url, key, method))
+        return catalog
+    monkeypatch.setitem(client.scope, "api_json", api)
+    main = client.loaded["main"]
+    store = client.loaded["home"]() / "openrouter.json"
+    assert main(["openrouter", "--check"]) == 0
+    assert json.loads(store.read_text()) == {"token": token}
+    assert store.stat().st_mode & 0o777 == 0o600
+    assert main(["openrouter"]) == 0
+    assert client.calls[-1][3]["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "1048576"
+    assert prompts == [True]
+    assert calls == [("https://ccfleet.io/openrouter/v1/models", token, "GET")] * 2
+    out = capsys.readouterr()
+    assert token not in out.out + out.err
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    assert main(["openrouter", "--check"]) == 0
+    assert main(["openrouter", "--forget-key"]) == 0
+    assert main(["openrouter", "--forget-key"]) == 0
+    assert not store.exists() and main(["openrouter", "--check"]) == 2
+
+
+def test_openrouter_does_not_cache_invalid_or_environment_keys(client, monkeypatch):
+    saved, entered, env = ["ccf_or_" + c * 43 for c in "abc"]
+    main = client.loaded["main"]
+    monkeypatch.delenv("CCFLEET_OPENROUTER_TOKEN", raising=False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    prompts = []
+    def prompt(_):
+        prompts.append(True)
+        return entered
+    monkeypatch.setattr(client.loaded["getpass"], "getpass", prompt)
+    accepted = {env}
+    def api(url, token, method):
+        if token not in accepted:
+            raise client.loaded["CliError"]("rejected", 401)
+        return {"data": [{"id": "example/one"}]}
+    monkeypatch.setitem(client.scope, "api_json", api)
+    path = client.loaded["home"]() / "openrouter.json"
+    assert main(["openrouter", "--check"]) == 2 and not path.exists()
+    client.loaded["write_private_profile"]("openrouter.json", {"token": saved})
+    monkeypatch.setenv("CCFLEET_OPENROUTER_TOKEN", env)
+    assert main(["openrouter", "--check"]) == 0 and json.loads(path.read_text())["token"] == saved
+    monkeypatch.delenv("CCFLEET_OPENROUTER_TOKEN")
+    assert main(["openrouter", "--check"]) == 2 and json.loads(path.read_text())["token"] == saved
+    accepted.add(entered)
+    assert main(["openrouter", "--check"]) == 0
+    assert json.loads(path.read_text())["token"] == entered and len(prompts) == 3
+    def offline(*a, **kw):
+        raise client.loaded["CliError"]("unavailable", 503)
+    monkeypatch.setitem(client.scope, "api_json", offline)
+    assert main(["openrouter", "--check"]) == 2
+    assert json.loads(path.read_text())["token"] == entered and len(prompts) == 3
