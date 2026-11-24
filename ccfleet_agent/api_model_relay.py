@@ -78,7 +78,7 @@ def load_profile(home, expected):
     return profile
 
 
-def prepare_blocks(blocks, *, history=False):
+def prepare_blocks(blocks, *, history=False, media=None):
     if isinstance(blocks, str):
         return
     if not isinstance(blocks, list):
@@ -89,13 +89,16 @@ def prepare_blocks(blocks, *, history=False):
         # Anthropic cache breakpoints must not create separately billed Gemini cache resources.
         b.pop("cache_control", None)
         kind = b.get("type")
+        if media is not None and kind in ("image", "document", "audio", "video"):
+            media(b)
+            continue
         if kind == "text" and isinstance(b.get("text"), str):
             continue
         if history and kind == "tool_use" and isinstance(b.get("input"), dict):
             if isinstance(b.get("name"), str) and isinstance(b.get("id"), str):
                 continue
         if history and kind == "tool_result" and isinstance(b.get("tool_use_id"), str):
-            prepare_blocks(b.get("content", ""))
+            prepare_blocks(b.get("content", ""), media=media)
             continue
         if history and kind in ("thinking", "redacted_thinking"):
             continue

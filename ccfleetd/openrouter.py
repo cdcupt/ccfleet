@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import http.client
 import json
@@ -23,6 +24,14 @@ HOST = "openrouter.ai"
 SLUG = re.compile(r"[A-Za-z0-9~][A-Za-z0-9_.~-]{0,63}/[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}\Z")
 RECEIPT = re.compile(r"(?:gen-|msg_)[A-Za-z0-9_-]{1,180}\Z")
 LIMIT = 16 * 1024 * 1024
+# Only advertise verified image models with a known context ceiling for prepaid holds.
+IMAGE_CONTEXT = {"deepseek/deepseek-v4.1-flash": 1048576}
+IMAGE_SIGNATURES = {
+    "image/png": (b"\x89PNG\r\n\x1a\n",),
+    "image/jpeg": (b"\xff\xd8\xff",),
+    "image/gif": (b"GIF87a", b"GIF89a"),
+    "image/webp": (b"RIFF",),
+}
 FIELDS = {
     "model",
     "messages",
@@ -87,7 +96,29 @@ def read_key(path):
         return key.decode("ascii")
 
 
-def prepare(value, models):
+class InputModeError(ValueError):
+    pass
+
+
+def validate_image(block):
+    source = block.get("source")
+    if (set(block) != {"type", "source"} or not isinstance(source, dict)
+            or set(source) != {"type", "media_type", "data"} or source["type"] != "base64"
+            or not isinstance(source["media_type"], str)
+            or source["media_type"] not in IMAGE_SIGNATURES
+            or not isinstance(source["data"], str) or not source["data"]):
+        raise InputModeError("Use an inline PNG, JPEG, GIF or WebP image.")
+    try:
+        data = base64.b64decode(source["data"], validate=True)
+    except ValueError:
+        raise InputModeError("The inline image contains invalid base64.") from None
+    media_type = source["media_type"]
+    if (not data.startswith(IMAGE_SIGNATURES[media_type])
+            or (media_type == "image/webp" and data[8:12] != b"WEBP")):
+        raise InputModeError("The inline image does not match its declared file type.")
+
+
+def prepare(value, models, *, images=False):
     from ccfleet_agent.api_model_relay import prepare_blocks
 
     for name in gateway.wire.IDENTITY_FIELDS:
@@ -95,6 +126,8 @@ def prepare(value, models):
     model = value.get("model")
     if not isinstance(model, str) or model not in models:
         raise ValueError("Choose a model offered by this Fleet OpenRouter endpoint.")
+    if images and model not in IMAGE_CONTEXT:
+        raise InputModeError("The selected Fleet model does not accept image input.")
     if (
         value.keys() - FIELDS
         or type(value.get("max_tokens")) is not int
@@ -104,8 +137,21 @@ def prepare(value, models):
         or not value["messages"]
     ):
         raise ValueError("Unsupported OpenRouter Messages request.")
-    # Reuse Fleet's text / local tool contract. Exclude provider-hosted tools, remote
-    # content and separately billed cache writes from this prepaid text route.
+    # Keep tool-use/result pairs intact when a pasted or historical attachment is omitted.
+    forwarded_image = False
+    omitted_media = False
+
+    def media(block):
+        nonlocal forwarded_image, omitted_media
+        kind = block["type"]
+        if images and kind == "image":
+            validate_image(block)
+            forwarded_image = True
+            return
+        block.clear()
+        block.update(type="text", text=f"[CCFleet omitted {kind} input in this session.]")
+        omitted_media = True
+
     prepare_blocks(value.get("system", ""))
     value.pop("cache_control", None)
     for msg in value["messages"]:
@@ -115,7 +161,8 @@ def prepare(value, models):
             or msg["role"] not in ("user", "assistant", "system")
         ):
             raise ValueError("Invalid message.")
-        prepare_blocks(msg["content"], history=msg["role"] != "system")
+        prepare_blocks(msg["content"], history=msg["role"] != "system",
+                       media=media if msg["role"] == "user" else None)
     tools = value.get("tools", [])
     if not isinstance(tools, list):
         raise ValueError("Invalid tool declarations.")
@@ -148,7 +195,7 @@ def prepare(value, models):
             "image": 0,
         }
     }
-    return value
+    return forwarded_image, omitted_media
 
 
 def credential(headers):
@@ -203,6 +250,7 @@ class Service:
         recent = self.store.openrouter_recent_models(owner, self.models)
         ordered = dict.fromkeys([*recent, *self.models])
         rows = [{"id": model, "type": "model", "display_name": model + price,
+                 "input_modalities": ["text", "image"] if model in IMAGE_CONTEXT else ["text"],
                  "fleet_recent": model in recent} for model in ordered]
         return {"data": rows, "fleet_billing": "admin_covered" if covered else "usage_plus_fee",
                 "has_more": False, "first_id": rows[0]["id"],
@@ -250,12 +298,23 @@ class Service:
     def forward(self, handler, owner, token, value, headers, body_size):
         store = self.store
         try:
-            value = prepare(value, self.models)
-            cents = hold_cents(body_size, value["max_tokens"], self.models[value["model"]])
+            mode = handler.headers.get("X-CCFleet-Input", "text")
+            if mode not in ("text", "images"):
+                raise InputModeError("Choose text or images for the Fleet input mode.")
+            forwarded_image, omitted_media = prepare(value, self.models, images=mode == "images")
+            if omitted_media and not forwarded_image:
+                body_size = len(json.dumps(value, ensure_ascii=False).encode())
+            # Compressed image bytes do not bound visual tokens. The model's context does.
+            prompt_tokens = (IMAGE_CONTEXT[value["model"]] if forwarded_image
+                             else body_size * 2 + 4096)
+            cents = hold_cents(prompt_tokens, value["max_tokens"], self.models[value["model"]])
             request_id = store.openrouter_reserve(
                 owner, token, value["model"], cents,
                 admin_account_id=self.cfg.openrouter_admin_account_id,
             )
+        except InputModeError as exc:
+            gateway.model_error(handler, 400, str(exc))
+            return
         except BillingError as exc:
             gateway.model_error(handler, 402, str(exc))
             return
