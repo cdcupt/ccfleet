@@ -51,10 +51,9 @@ class BillingError(ValueError):
     pass
 
 
-def hold_cents(body_size, max_tokens, rates):
-    # Text-only requests. Include serialization, tool templates and model framing.
+def hold_cents(prompt_tokens, max_tokens, rates):
     prompt, completion = rates
-    ceiling = ((body_size * 2 + 4096) * prompt + max_tokens * completion) / 1_000_000
+    ceiling = (prompt_tokens * prompt + max_tokens * completion) / 1_000_000
     return int((ceiling * MULTIPLIER * 100).to_integral_value(rounding=ROUND_CEILING))
 
 

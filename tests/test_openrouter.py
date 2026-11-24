@@ -80,7 +80,7 @@ def provider(router):
     worker.join()
 
 
-def api(c, token, body=None, path=None):
+def api(c, token, body=None, path=None, *, headers=None):
     conn = http.client.HTTPConnection(*c.server.server_address, timeout=5)
     path = path or ("/openrouter/v1/models" if body is None else "/openrouter/v1/messages")
     conn.request(
@@ -92,6 +92,7 @@ def api(c, token, body=None, path=None):
             "Authorization": "Bearer " + token,
             "Content-Type": "application/json",
             "User-Agent": "PRIVATE-CLIENT",
+            **(headers or {}),
         },
     )
     r = conn.getresponse()
@@ -108,6 +109,76 @@ def payload(model, **opts):
         "max_tokens": 4096,
         **opts,
     }
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_image_history_survives_switching_input_modes(router, provider, nested):
+    c = router
+    grant(c)
+    token = c.store.openrouter_key("alice")
+    rows = json.loads(api(c, token)[2])["data"]
+    assert [r["input_modalities"] for r in rows] == [["text", "image"], ["text"]]
+    png = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"
+           "/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")
+    image = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": png}}
+    content = [{"type": "text", "text": "Screenshot"}, image]
+    message = [{"type": "tool_result", "tool_use_id": "t1", "content": content}] if nested else content
+    turns = [{"role": "user", "content": message}]
+    if nested:
+        turns.insert(0, {"role": "assistant", "content": [
+            {"type": "tool_use", "name": "Read", "id": "t1", "input": {}}
+        ]})
+    calls, replies = provider
+    for i, headers in enumerate(({}, {"X-CCFleet-Input": "images"}, {})):
+        replies.append((200, "application/json", json.dumps({
+            "id": f"gen-image-{i}", "type": "message", "usage": {"cost": 0}
+        }).encode()))
+        assert api(c, token, payload(MODELS[0], messages=turns), headers=headers)[0] == 200
+        body = calls[-1][2]
+        blocks = body["messages"][-1]["content"]
+        if nested:
+            assert blocks[0]["tool_use_id"] == "t1"
+            blocks = blocks[0]["content"]
+        assert blocks[0] == content[0]
+        if headers:
+            assert blocks[1] == image
+            assert body["provider"]["max_price"]["image"] == 0
+            assert "X-CCFleet-Input" not in calls[-1][1]
+        else:
+            assert png not in repr(body)
+            assert blocks[1]["type"] == "text" and "omitted image" in blocks[1]["text"]
+
+
+def test_image_mode_validates_model_and_inline_source_before_billing(router, provider):
+    c = router
+    grant(c)
+    token = c.store.openrouter_key("alice")
+    headers = {"X-CCFleet-Input": "images"}
+    status, _, msg = api(c, token, payload(MODELS[1]), headers=headers)
+    assert status == 400 and b"does not accept image" in msg
+    for src in ({"type": "url", "url": "https://example.org/picture.png"},
+                {"type": "base64", "media_type": "image/png", "data": "invalid!"},
+                {"type": "base64", "media_type": "image/png", "data": "bm90IGEgcG5n"}):
+        body = payload(MODELS[0], messages=[{"role": "user", "content": [
+            {"type": "image", "source": src}
+        ]}])
+        assert api(c, token, body, headers=headers)[0] == 400
+    assert not provider[0] and not c.store.openrouter_receipts("alice")
+
+
+def test_image_wallet_hold_uses_visual_context_only_for_forwarded_images(router, provider):
+    c = router
+    grant(c, "0.50")
+    token = c.store.openrouter_key("alice")
+    body = payload(MODELS[0], messages=[{"role": "user", "content": [
+        {"type": "image", "source": {"type": "base64", "media_type": "image/gif",
+                                     "data": "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="}}
+    ]}])
+    assert api(c, token, body, headers={"X-CCFleet-Input": "images"})[0] == 402
+    assert not provider[0] and not c.store.openrouter_receipts("alice")
+    provider[1].append((200, "application/json", b'{"id":"gen-text","type":"message","usage":{"cost":0}}'))
+    assert api(c, token, body)[0] == 200
+    assert c.store.wallet_balance("alice") == 50
 
 
 def test_slotless_account_create_catalog_rotate_revoke(router):
