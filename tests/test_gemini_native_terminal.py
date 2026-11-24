@@ -103,6 +103,52 @@ def test_launcher_runs_the_terminal_over_the_existing_gemini_transport(tmp_path,
     ]
 
 
+@pytest.mark.parametrize(
+    "flags, expected",
+    [
+        ([], "ccfleet-gemini-native-v1"),
+        (["--native"], "ccfleet-gemini-native-v1"),
+        (["--editor"], "ccfleet-gemini-editor-v1"),
+        (["--test", "npm"], "ccfleet-gemini-editor-v1"),
+    ],
+)
+def test_interactive_gemini_chooses_its_mode(flags, expected, tmp_path, monkeypatch):
+    """A plain `ccfleet gemini` runs the native terminal; the editor needs its own flag."""
+    cli = runpy.run_path(str(ROOT / "laptop/ccfleet"))
+    scope = cli["cmd_gemini"].__globals__
+    device = {
+        "device_id": "test",
+        "slot_id": "slot",
+        "server": "https://ccfleet.io",
+        "endpoint": "wss://ccfleet.io/api/cli/connect",
+    }
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setenv("CCFLEET_HOME", str(tmp_path / "config"))
+    monkeypatch.setitem(scope, "load_config",
+                        lambda: {"devices": {"test": device}, "active": "test"})
+    monkeypatch.setitem(scope, "ssh_transport_command",
+                        lambda d, *, tty, fleet_only: ["paired-transport"])
+    monkeypatch.setitem(scope, "installed_agent", lambda name: "/trusted/agy")
+    monkeypatch.setitem(scope, "project_files", lambda: SimpleNamespace(open_root=None))
+    monkeypatch.setitem(scope, "project_environment", lambda: {})
+    launched = []
+    ops = []
+
+    def component(name, digest, operation, slot_command):
+        ops.append(operation)
+        if operation == "workspace-tools":
+            return SimpleNamespace(export_branch_bundle=None)
+        return SimpleNamespace(run=lambda *a, **k: launched.append(a))
+
+    monkeypatch.setitem(scope, "slot_component", component)
+    assert cli["main"](["gemini", "--project", str(tmp_path), *flags]) == 0
+    (call,) = launched
+    assert [value for value in call if isinstance(value, list)] == [["paired-transport", expected]]
+    assert ops[0] == ("native-terminal" if expected.endswith("native-v1") else "editor-client")
+
+
 def test_frame_roundtrip_and_limits():
     stream = packet({"ready": "ccfleet-native-v1"})
     assert terminal.receive(stream) == {"ready": "ccfleet-native-v1"}
