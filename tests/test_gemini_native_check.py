@@ -120,9 +120,13 @@ def test_launcher_uses_pinned_component_and_existing_gemini_transport(tmp_path, 
     monkeypatch.setitem(scope, "load_config", config)
     monkeypatch.setitem(scope, "ssh_transport_command", transport)
     calls = []
-    monkeypatch.setitem(
-        scope, "packaged_helper", lambda n, h: SimpleNamespace(run=lambda *a: calls.append(a))
-    )
+    loaded = []
+
+    def component(name, digest, operation, slot_command):
+        loaded.append((name, digest, operation, slot_command))
+        return SimpleNamespace(run=lambda *a: calls.append(a))
+
+    monkeypatch.setitem(scope, "slot_component", component)
     monkeypatch.setitem(scope, "installed_agent", lambda name: "/trusted/agy")
     args = SimpleNamespace(
         project=str(tmp_path), slot="", pair=False, preview=False, native_check=True
@@ -130,4 +134,12 @@ def test_launcher_uses_pinned_component_and_existing_gemini_transport(tmp_path, 
     assert cli["cmd_gemini"](args) == 0
     assert calls == [
         ("/trusted/agy", tmp_path, ["paired-transport", "ccfleet-gemini-native-check-v1"])
+    ]
+    assert loaded == [
+        (
+            "gemini_native_check",
+            cli["NATIVE_CHECK_HASH"],
+            "native-check",
+            ["paired-transport", "ccfleet-gemini-release-v1"],
+        )
     ]
