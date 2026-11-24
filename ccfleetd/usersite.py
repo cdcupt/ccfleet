@@ -1738,6 +1738,14 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                                    store, cfg, s, now), slot_id=s["id"]),
                                listening=None if s["node_id"] in silent else since)
                     for s in held)
+    openrouter_on = bool(getattr(cfg, "openrouter_models", "") and not cfg.broker_only)
+    openrouter_entry = ""
+    openrouter_css = ""
+    if openrouter_on:
+        from . import openrouter_account
+
+        openrouter_entry = openrouter_account.entry(cfg, account, store)
+        openrouter_css = openrouter_account.ENTRY_CSS
     body = (
         '<section class="account-dashboard" data-account-layout="setup-first">'
         '<div class="pagehead account-heading"><div><p class="account-eyebrow">CC FLEET</p>'
@@ -1748,7 +1756,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         + label('Refresh status', '刷新状态', inline=True)
         + '</a></p></div><a class="btn quiet" href="/docs/guide">'
         + label('Setup help', '设置帮助', inline=True) + '</a></div>'
-        + _account_nav("/account", monthly=_monthly_management(store, cfg, account)) + banner
+        + _account_nav("/account", monthly=_monthly_management(store, cfg, account),
+                       openrouter=openrouter_on) + banner
         + trial_routes.entry(cfg)
         + (_wallet_panel(store, account, topup_ready=topup_ready, csrf=csrf, compact=bool(held))
            if wallet_routes.enabled(cfg) else
@@ -1757,8 +1766,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
            + f'</h2>{allowance}</div>{claim}</div>')
         + (f'<div class="slots">{cards}</div>' if cards else "")
         + (_wallet_history(store, account) if wallet_routes.enabled(cfg) else "")
-        + ('<p><a href="/account/openrouter">' + label('OpenRouter models and usage',
-           'OpenRouter 模型与用量', inline=True) + '</a></p>' if cfg.openrouter_models else '')
+        + openrouter_entry
         + gateway_ui.panel(store, cfg, account, csrf, held)
         + ('<details class="account-advanced"><summary>'
            + label('Email notifications', '邮件通知', inline=True) + '</summary>'
@@ -1795,7 +1803,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     return _shell("your slots", body,
                   _refresh(held, logins, idle_refresh=False),
                   viewer=viewer_for(account, session_id, cfg, store), width="wide",
-                  extra_css=wallet_ui.CSS if wallet_routes.enabled(cfg) else "")
+                  extra_css=(wallet_ui.CSS if wallet_routes.enabled(cfg) else "")
+                  + openrouter_css)
 
 
 def slots_page(store: Store, cfg: Config, now: float, query: Mapping[str, str], *,
@@ -1824,12 +1833,14 @@ def _monthly_management(store: Store, cfg: Config, account: Mapping[str, Any]) -
         return False
 
 
-def _account_nav(current: str, *, monthly: bool = False) -> str:
+def _account_nav(current: str, *, monthly: bool = False, openrouter: bool = False) -> str:
     pages = [("/account", "Your slots", "我的槽位"),
              ("/account/usage", "Usage & limits", "用量与额度"),
              ("/account/available", "Available slots", "可用槽位")]
     if monthly:
         pages.append(("/account/subscriptions", "Monthly payments", "月付管理"))
+    if openrouter:
+        pages.append(("/account/openrouter", "OpenRouter", "OpenRouter"))
     return ('<nav class="account-nav" aria-label="Slot pages" '
             'data-aria-label-en="Slot pages" data-aria-label-zh="槽位页面">'
             + ''.join('<a class="btn" href="' + path + '"'
@@ -1918,7 +1929,9 @@ def usage_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                 '专属额度，以及各自的重置时间。', inline=True) + '</p></div>'
             + '<a class="btn" href="https://claude.ai/settings/usage">'
             + label('Open Claude usage', '打开 Claude 用量页', inline=True) + '</a></div>'
-            + _account_nav('/account/usage', monthly=_monthly_management(store, cfg, account))
+            + _account_nav('/account/usage', monthly=_monthly_management(store, cfg, account),
+                           openrouter=bool(getattr(cfg, "openrouter_models", "")
+                                           and not cfg.broker_only))
             + banner + '<p><a href="/account/usage" data-fleet-status="account">'
             + label('Refresh page readings', '刷新页面读数', inline=True)
             + '</a></p><div class="quota-overview">' + (''.join(cards) or empty)
@@ -1947,7 +1960,9 @@ def available_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any
             + label("Search providers and network types, then choose a machine.",
                     "搜索服务商与网络类型，再选择主机。", inline=True) + '</p></div>'
             + _account_nav("/account/available",
-                           monthly=_monthly_management(store, cfg, account)) + note
+                           monthly=_monthly_management(store, cfg, account),
+                           openrouter=bool(getattr(cfg, "openrouter_models", "")
+                                           and not cfg.broker_only)) + note
             + offer_ui.browse(store, account, csrf_for(session_id, cfg.cookie_secret), now,
                               cfg.heartbeat_max_age_s, query, can_claim=can_claim,
                               purchase=wallet_routes.enabled(cfg), monthly=monthly))
