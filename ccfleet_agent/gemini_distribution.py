@@ -75,7 +75,7 @@ EDITOR_HISTORY = (
         "acp-client": "0f6db63e11ef31d6714859f14df4654a34622cc6b5797a69fc025cf4ae42d579",
         "project-publish": "9e5d10057dc525da5349c383c0a7e3ddc160d6d76b5139016ab287385a6ea098",
         "native-check": "e5fed949241811152e371158645b99c832c47a57575bb2d6098e2cf213ffb682",
-        "native-terminal": "6525d1f0c7be67fffaca4c1d5b1e5497d43ecf27a6591d7242e95c5da8facfba",
+        "native-terminal": "1615fa56f72e7fa1fc59c643968379898268ed9b3ecb6248f4de4149f496db07",
     }),
 )
 

@@ -43,6 +43,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
@@ -57,6 +58,7 @@ TURN_WAIT = 3600.0
 DRAIN_WAIT = 300.0
 TURN_LIMIT = "3600s"
 DENIAL_POLL = 1.0
+DENIAL_GRACE = 3.0
 TRANSCRIPT_LIMIT = 8 * 1024 * 1024
 REPLAY_LIMIT = 8
 REPLAY_AGE = 300.0
@@ -109,6 +111,23 @@ def declarations(body: dict) -> dict:
 
 def function_responses(body: dict) -> list:
     return [p["functionResponse"] for p in parts(body) if "functionResponse" in p]
+
+
+def entry_time(entry: dict) -> float:
+    """Transcript timestamps are UTC; entries without one never match a denial."""
+    try:
+        return datetime.strptime(
+            str(entry.get("created_at", "")), "%Y-%m-%dT%H:%M:%SZ"
+        ).replace(tzinfo=timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def is_continuation(body: dict) -> bool:
+    """The request continues a function call instead of carrying a new user prompt."""
+    contents = body.get("contents") or []
+    parts_ = (contents[-1].get("parts") or []) if contents else []
+    return bool(parts_) and all("functionResponse" in p for p in parts_)
 
 
 def latest_user_text(body: dict) -> str:
@@ -302,6 +321,7 @@ class Session:
         self.current_turn: Optional[str] = None
         self.turn_open: Optional[str] = None
         self.pending: Optional[dict] = None
+        self.denial: Optional[dict] = None
         self.declared: dict = {}
         self.hello_sent = False
         self.replays: dict = {}
@@ -349,18 +369,32 @@ class Session:
 
     def _monitor(self) -> None:
         while not self.closed.wait(DENIAL_POLL):
+            self._tick()
+
+    def _tick(self) -> None:
+        """One watchdog step: release the held call only when the local side stays silent."""
+        with self.state_lock:
+            pending = dict(self.pending) if self.pending else None
+            seen = dict(self.denial) if self.denial else None
+        if pending is None:
             with self.state_lock:
-                pending = dict(self.pending) if self.pending else None
-            if pending is None:
-                continue
-            if time.time() - pending["at"] > TURN_WAIT:
-                self._release(
-                    pending["call"], "No local operation result arrived; the outcome is unknown."
-                )
-                continue
+                self.denial = None
+            return
+        if time.time() - pending["at"] > TURN_WAIT:
+            self._release(
+                pending["call"], "No local operation result arrived; the outcome is unknown."
+            )
+            return
+        if seen is None or seen["call"] != pending["call"]:
             error = self._denial(pending)
             if error:
-                self._release(pending["call"], error)
+                with self.state_lock:
+                    self.denial = {"call": pending["call"], "error": error, "at": time.time()}
+            return
+        if time.time() - seen["at"] >= DENIAL_GRACE:
+            # The local CLI's own continuation gets the first chance to carry the
+            # denial; this fires only when no continuation ever arrives.
+            self._release(pending["call"], seen["error"])
 
     def _release(self, call_id: str, message: str) -> None:
         with self.state_lock:
@@ -389,8 +423,11 @@ class Session:
             entries = [json.loads(line) for line in newest[1].read_bytes().splitlines()]
         except (OSError, ValueError):
             return None
+        # The transcript keeps every earlier turn, so only entries recorded after
+        # this call was issued may describe its outcome.
+        fresh = [entry for entry in entries if entry_time(entry) >= pending["at"] - 5]
         name, args = pending["name"], pending["args"]
-        for before, after in zip(entries, entries[1:]):
+        for before, after in zip(fresh, fresh[1:]):
             calls = before.get("tool_calls", [])
             if len(calls) != 1 or calls[0].get("name") != name or calls[0].get("args") != args:
                 continue
@@ -431,8 +468,14 @@ class Session:
             turn = pending["turn"]
             with self.state_lock:
                 self.pending = None
+                self.denial = None
             self._send_result(turn, pending["call"], outcome)
             event = self._take(turn)
+        elif is_continuation(body):
+            # The call was already released (denial, watchdog or interruption), so
+            # this result has no turn to continue. Report it instead of replaying
+            # the previous prompt as a fresh turn.
+            raise ValueError("the local operation result arrived after its turn ended")
         else:
             text = latest_user_text(body)
             require(text, "the client turn carried no user message")
@@ -543,7 +586,9 @@ class Session:
     def _validate_call(self, event: dict) -> Optional[str]:
         name = event.get("name")
         args = event.get("args")
-        spec = self.declared.get(name) if isinstance(name, str) else None
+        if not isinstance(name, str) or name not in CLIENT_TOOLS:
+            return f"unsupported tool: {name}"
+        spec = self.declared.get(name)
         if spec is None:
             return f"unsupported tool: {name}"
         if not isinstance(args, dict):
