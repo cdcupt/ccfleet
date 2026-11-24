@@ -172,6 +172,31 @@ def session(channel, folder, executable, authorized):
                     os.waitpid(pid, 0)
 
 
+def native_worker(fd):
+    """Serve the native terminal bridge from the owner's GUI session.
+
+    Google's CLI reads its sign-in from the login keychain, which a process started by
+    an SSH forced command cannot reach. This worker runs inside the owner's Aqua
+    session, and the SSH entry brokers the paired channel to it.
+    """
+    home = Path(mac_policy.authenticated_owner().pw_dir)
+    with socket.socket(fileno=fd) as channel:
+        mac_relay_client.require_peer(channel, os.getuid())
+        channel.settimeout(8)
+        fingerprint = channel.recv(32, socket.MSG_WAITALL)
+        if len(fingerprint) != 32 or not permitted(home, fingerprint):
+            return 2
+        channel.settimeout(None)
+        if __package__:
+            from . import gemini_native_terminal
+        else:
+            import gemini_native_terminal
+        with channel.makefile("rb") as source, channel.makefile("wb") as sink:
+            return gemini_native_terminal.bridge(
+                source, sink, home / ".local/bin/agy", lambda: permitted(home, fingerprint)
+            )
+
+
 def worker(fd):
     home = Path(mac_policy.authenticated_owner().pw_dir)
     with socket.socket(fileno=fd) as channel:
@@ -212,7 +237,7 @@ def serve():
                         if role == b"P":
                             conn.sendall(b"Y")
                             continue
-                        if role != b"S":
+                        if role not in (b"S", b"N"):
                             continue
                         conn.settimeout(None)
                     except (OSError, ValueError):
@@ -226,7 +251,7 @@ def serve():
                             "-I",
                             "-B",
                             str(Path(__file__).resolve()),
-                            "worker",
+                            "worker" if role == b"S" else "native",
                             str(conn.fileno()),
                         ],
                         pass_fds=(conn.fileno(),),
@@ -239,6 +264,8 @@ def main(argv):
         return serve()
     if len(argv) == 2 and argv[0] == "worker":
         return worker(int(argv[1]))
+    if len(argv) == 2 and argv[0] == "native":
+        return native_worker(int(argv[1]))
     if len(argv) == 2 and argv[0] == "mcp":
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
             peer.connect(argv[1])

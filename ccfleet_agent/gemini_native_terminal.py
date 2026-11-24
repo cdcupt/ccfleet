@@ -205,7 +205,9 @@ def endpoint(dispatch: Any):
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
-            except (ValueError, OSError, KeyError, TypeError, EOFError, queue.Empty):
+            except (ValueError, OSError, KeyError, TypeError, EOFError, queue.Empty) as exc:
+                if os.environ.get("CCFLEET_NATIVE_DEBUG"):
+                    print(f"native terminal request failed: {exc}", file=sys.stderr, flush=True)
                 with contextlib.suppress(OSError):
                     self.send_error(400, "The native terminal request could not complete.")
 

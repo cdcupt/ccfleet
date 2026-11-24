@@ -44,14 +44,16 @@ def main():
     home = Path(mac_policy.authenticated_owner().pw_dir)
     mac_policy.require_enabled(home)
     if os.environ["SSH_ORIGINAL_COMMAND"] == "ccfleet-gemini-native-v1":
-        if __package__:
-            from . import gemini_native_terminal
-        else:
-            import gemini_native_terminal
-        return gemini_native_terminal.bridge(
-            sys.stdin.buffer, sys.stdout.buffer, home / ".local/bin/agy",
-            lambda: antigravity_slot.permitted(home, bytes.fromhex(sys.argv[1])),
-        )
+        # The Google sign-in lives in the login keychain, which an SSH forced command
+        # cannot read; the owner's GUI session service runs the bridge instead.
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(8)
+            sock.connect(str(mac_policy.directory(home) / "workspace.sock"))
+            mac_relay_client.require_peer(sock, os.getuid())
+            sock.sendall(b"N" + bytes.fromhex(sys.argv[1]))
+            sock.settimeout(None)
+            workspace_io.pipe_socket(sock)
+        return 0
     if os.environ["SSH_ORIGINAL_COMMAND"] == "ccfleet-gemini-native-check-v1":
         if __package__:
             from . import gemini_native_check
