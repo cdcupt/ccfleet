@@ -37,11 +37,22 @@ def main():
         or not re.fullmatch(r"[0-9a-f]{64}", sys.argv[1])
         or os.environ.get("SSH_ORIGINAL_COMMAND")
         not in ("ccfleet-antigravity-v1", "ccfleet-gemini-preview-v1", "ccfleet-gemini-release-v1",
-                "ccfleet-gemini-editor-v1")
+                "ccfleet-gemini-editor-v1", "ccfleet-gemini-native-check-v1")
     ):
         return 2
     home = Path(mac_policy.authenticated_owner().pw_dir)
     mac_policy.require_enabled(home)
+    if os.environ["SSH_ORIGINAL_COMMAND"] == "ccfleet-gemini-native-check-v1":
+        if __package__:
+            from . import gemini_native_check
+        else:
+            import gemini_native_check
+        fingerprint = bytes.fromhex(sys.argv[1])
+        signal.alarm(gemini_native_check.TIMEOUT + 10)
+        return gemini_native_check.slot(
+            sys.stdin.buffer, sys.stdout.buffer, home / ".local/bin/agy",
+            lambda: antigravity_slot.permitted(home, fingerprint),
+        )
     if os.environ["SSH_ORIGINAL_COMMAND"] == "ccfleet-gemini-editor-v1":
         if __package__:
             from . import gemini_editor_slot

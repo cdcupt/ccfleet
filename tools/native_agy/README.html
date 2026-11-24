@@ -1,0 +1,11 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>CCFleet native agy verification</title>
+<h1>CCFleet native agy verification</h1>
+<p>This macOS prototype runs two original Google CLI processes. The interactive client reviews four operations in a disposable Git repository. The headless slot calls their MCP equivalents and receives the client results. Both model endpoints use deterministic fixtures. This command verifies the integration and does not provide general-purpose Gemini chat.</p>
+<h2>Run on one Mac</h2>
+<pre>python3 ccfleet_agent/gemini_native_check.py loopback .</pre>
+<p>Install Google’s agy on the Mac before starting. Complete the CLI’s first-run screens and trust the disposable folder. Allow the proof-file read if prompted, accept the edit to approved.txt, allow git rev-parse, and reject the edit to denied.txt. A passing run prints PASS after the backend receives the denial in the same conversation. Each run gets isolated profiles and a new repository.</p>
+<h2>Run through the private slot</h2>
+<p>The slot must have the matching opt-in handler installed and the client must have a Gemini workspace pairing. The client launcher uses the existing pinned SSH transport through ccfleet.io. Run the following command from the unpacked prototype, providing the directory in which to create the disposable repository.</p>
+<pre>./laptop/ccfleet gemini --native-check --project /path/to/project</pre>
+<p>Normal CCFleet pairing uses <code>./laptop/ccfleet pair gemini</code>. An ordinary slot-device grant cannot run the check. A timeout or ambiguous operation ends the session. Restarting creates a fresh fixture. The denial observer uses the transcript layout verified in agy 1.5.14. No service tokens, personal OAuth profile, or Google model calls are needed for the fixture.</p>
+<p>The included patch targets CCFleet source revision <code>1258d3f</code>. It adds the slot handler, opt-in launcher, installer support, and focused tests. Applying source changes and activating a private-slot installation are separate actions. Google’s <a href="https://antigravity.google/docs/faq/">Antigravity FAQ</a> excludes third-party headless wrappers from consumer-plan support.</p></html>

@@ -17,6 +17,7 @@ PREDECESSORS = {
         "36eb61aa64f5d70a546fe26f4f9e5a6775a0d33bef647e8621818c1dfb8dcde9",
     },
     "antigravity_entry.py": {
+        "a715219d47e330f4e88467720a6ba99e00187a618fe9487758cdc5db9e0dd1c1",
         "ae173ac4ff3092367de9cb8f71b781e301c6cf192ce6a66a580ae8a7205d3fac",
         "fa617a5d93bf2074d92f13a94ee3c5fb07b938fe30ee24262d9a2725359192db",
         "92d538c2b46ced80e3d4e15422d404da4ea073a4c523c53f3c560fe6040ac24b",
@@ -129,7 +130,7 @@ def install():
     from ccfleet_agent import gemini_distribution as dist
 
     components = {root / name: (source / name).read_bytes() for name in (
-        "antigravity_entry.py", "antigravity_slot.py", "gemini_preview.py",
+        "antigravity_entry.py", "antigravity_slot.py", "gemini_preview.py", "gemini_native_check.py",
         "gemini_distribution.py", "workspace_io.py", "gemini_editor_distribution.py",
         "gemini_editor_slot.py", "gemini_recovery.py", "project_files.py")}
     for op, name in dist.EDITOR_FILES.items():
