@@ -38,9 +38,13 @@ def test_install_preserves_existing_job_and_finder_launches_only_owner_login(
     history = []
     for version, revision, historical_pins in dist.EDITOR_HISTORY:
         pins = {}
+        # The current version's snapshot is the real component; only superseded
+        # versions are synthetic here, exactly as they are on an enrolled Mac.
+        current = version == dist.EDITOR_VERSION
         for op in historical_pins:
             name = dist.EDITOR_FILES[op]
-            raw = f"public {version} {name}".encode()
+            raw = ((ROOT / "ccfleet_agent" / name).read_bytes() if current
+                   else f"public {version} {name}".encode())
             snapshot = dist.editor_snapshot(name, version)
             path = runtime / snapshot
             path.write_bytes(raw)
