@@ -131,8 +131,9 @@ def install():
 
     components = {root / name: (source / name).read_bytes() for name in (
         "antigravity_entry.py", "antigravity_slot.py", "gemini_preview.py", "gemini_native_check.py",
-        "gemini_distribution.py", "workspace_io.py", "gemini_editor_distribution.py",
-        "gemini_editor_slot.py", "gemini_recovery.py", "project_files.py")}
+        "gemini_native_terminal.py", "gemini_distribution.py", "workspace_io.py",
+        "gemini_editor_distribution.py", "gemini_editor_slot.py", "gemini_recovery.py",
+        "project_files.py")}
     for op, name in dist.EDITOR_FILES.items():
         for version, revision, pins in dist.EDITOR_HISTORY:
             if op not in pins:
