@@ -1632,8 +1632,8 @@ def gemini_project_access(args: argparse.Namespace) -> int:
               "ccfleet gemini --revoke-full-access.")
     else:
         access.grant(remote)
-        print("Project access saved. Open ccfleet gemini or use its T3 provider in this folder. "
-              "Revoke with ccfleet gemini --revoke-full-access.")
+        print("Project access saved. Open ccfleet gemini --editor or use its T3 provider in this "
+              "folder. Revoke with ccfleet gemini --revoke-full-access.")
     return 0
 
 
