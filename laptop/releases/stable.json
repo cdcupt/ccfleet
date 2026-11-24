@@ -1,1 +1,8 @@
-{"expires_at": 1800720572, "manifest_url": "https://raw.githubusercontent.com/cdcupt/ccfleet/d29c60f4d5146a3a3db8390f4b265eb58a71814d/laptop/releases/0.2.28.json", "revision": "a190fc515ee3967748765dafd26374998565d3a8", "schema": 1, "signature_url": "https://raw.githubusercontent.com/cdcupt/ccfleet/d29c60f4d5146a3a3db8390f4b265eb58a71814d/laptop/releases/0.2.28.json.sig", "version": "0.2.28"}
+{
+ "expires_at": 1800723508,
+ "manifest_url": "https://raw.githubusercontent.com/cdcupt/ccfleet/6b81045651dc48f88f3ac0db5cb80f3d18789b88/laptop/releases/0.2.28.json",
+ "revision": "917ddb5e1b2aa4653a7fbffc7ef0a5d67263cf4f",
+ "schema": 1,
+ "signature_url": "https://raw.githubusercontent.com/cdcupt/ccfleet/6b81045651dc48f88f3ac0db5cb80f3d18789b88/laptop/releases/0.2.28.json.sig",
+ "version": "0.2.28"
+}
