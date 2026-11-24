@@ -4,6 +4,7 @@ import io
 import json
 import runpy
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -341,29 +342,72 @@ def test_session_releases_an_interrupted_call_before_the_next_prompt(monkeypatch
     assert session.pending["call"] == "d" * 32
 
 
-def test_session_releases_a_denied_call_from_the_transcript(tmp_path):
+def write_denial(tmp_path, *, when, call=None, error="The user denied permission."):
     transcript = tmp_path / ".gemini/antigravity-cli/brain/turn/.system_generated/logs/transcript_full.jsonl"
-    transcript.parent.mkdir(parents=True)
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    stamp = when.strftime("%Y-%m-%dT%H:%M:%SZ")
+    call = call or {"name": "read_file", "args": {"Path": "/x"}}
     transcript.write_text(
-        json.dumps({"step_index": 1, "tool_calls": [{"name": "read_file", "args": {"Path": "/x"}}]})
+        json.dumps({"step_index": 1, "created_at": stamp, "tool_calls": [call]})
         + "\n"
-        + json.dumps({"step_index": 2, "status": "ERROR", "error": "The user denied permission."})
+        + json.dumps({"step_index": 2, "created_at": stamp, "status": "ERROR", "error": error})
         + "\n"
     )
-    session = terminal.Session(relay(), tmp_path, tmp_path, pump=False)
-    pending = {
+
+
+def pending_call():
+    return {
         "turn": "t" * 32,
         "call": "c" * 32,
         "name": "read_file",
         "args": {"Path": "/x"},
         "at": time.time() - 1,
     }
+
+
+def test_session_releases_a_denied_call_from_the_transcript(tmp_path):
+    write_denial(tmp_path, when=datetime.now(timezone.utc))
+    session = terminal.Session(relay(), tmp_path, tmp_path, pump=False)
+    pending = pending_call()
     assert session._denial(pending) == "The user denied permission."
     session.pending = pending
     session._release("c" * 32, "The user denied permission.")
     assert frames(session.relay.stdin) == [
         {"turn": "t" * 32, "call": "c" * 32, "error": "The user denied permission."}
     ]
+
+
+def test_denial_ignores_an_identical_call_from_an_earlier_turn(tmp_path):
+    write_denial(tmp_path, when=datetime.now(timezone.utc) - timedelta(hours=1))
+    session = terminal.Session(relay(), tmp_path, tmp_path, pump=False)
+    assert session._denial(pending_call()) is None
+
+
+def test_watchdog_detects_the_denial_then_gives_the_continuation_its_chance(tmp_path):
+    write_denial(tmp_path, when=datetime.now(timezone.utc))
+    session = terminal.Session(relay(), tmp_path, tmp_path, pump=False)
+    session.pending = pending_call()
+    session._tick()
+    assert session.denial is not None and session.pending is not None
+    assert session.relay.stdin.getvalue() == b""
+    session.denial["at"] -= terminal.DENIAL_GRACE + 1
+    session._tick()
+    assert session.pending is None
+    assert frames(session.relay.stdin) == [
+        {"turn": "t" * 32, "call": "c" * 32, "error": "The user denied permission."}
+    ]
+    session._tick()
+    assert session.denial is None
+
+
+def test_session_refuses_a_continuation_after_its_turn_ended(tmp_path):
+    session = terminal.Session(relay(), tmp_path, tmp_path, pump=False)
+    with pytest.raises(ValueError, match="after its turn ended"):
+        session.dispatch(
+            "/v1beta/models/gemini:streamGenerateContent?alt=sse",
+            body("hello", {"name": "read_file", "id": "c" * 32, "response": {"output": "ok"}}),
+        )
+    assert session.relay.stdin.getvalue() == b""
 
 
 def test_endpoint_requires_the_loopback_key():
