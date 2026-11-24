@@ -690,3 +690,35 @@ def test_openrouter_does_not_cache_invalid_or_environment_keys(client, monkeypat
     monkeypatch.setitem(client.scope, "api_json", offline)
     assert main(["openrouter", "--check"]) == 2
     assert json.loads(path.read_text())["token"] == entered and len(prompts) == 3
+
+
+@pytest.mark.parametrize("billing", ["admin_covered", "usage_plus_fee"])
+def test_openrouter_permission_default_and_overrides(client, monkeypatch, tmp_path, billing):
+    monkeypatch.setenv("CCFLEET_OPENROUTER_TOKEN", "ccf_or_" + "d" * 43)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setitem(client.scope, "api_json", lambda *a, **kw: {
+        "data": [{"id": "example/model"}], "fleet_billing": billing})
+    main = client.loaded["main"]
+    def launch(*args):
+        assert main(["openrouter", *args]) == 0
+        command, _, _, settings, _ = client.calls[-1]
+        return command, settings
+    _, settings = launch()
+    assert settings["permissions"] == {"defaultMode": "bypassPermissions"}
+    command, settings = launch("--permission-mode", "auto")
+    assert "permissions" not in settings and command[command.index("--permission-mode") + 1] == "auto"
+    command, settings = launch("--", "--permission-mode=plan")
+    assert "permissions" not in settings and "--permission-mode=plan" in command
+    for option in ("--continue", "-r", "--resume=some-session", "--restricted", "--safe-mode"):
+        _, settings = launch("--", option)
+        assert "permissions" not in settings
+    config = tmp_path / "claude" / "settings.json"
+    config.parent.mkdir()
+    config.write_text('{"permissions":{"defaultMode":"manual"}}')
+    _, settings = launch()
+    assert "permissions" not in settings
+    assert json.loads(config.read_text())["permissions"]["defaultMode"] == "manual"
+    config.write_text('{"permissions":{"disableBypassPermissionsMode":"disable"}}')
+    _, settings = launch()
+    assert "permissions" not in settings
