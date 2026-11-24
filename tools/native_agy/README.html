@@ -11,6 +11,16 @@ session, where this Mac runs the model and the slot only supplies the workspace 
 available as <code>ccfleet gemini --editor</code>; T3 Code's <code>--acp</code> command is
 unchanged.</p>
 <p>Inside the stock Antigravity interface, review each operation as it arrives: allow a read, accept or reject an edit, allow a command. A rejection keeps the file unchanged, and the slot receives the denial in the same remote conversation. Turns are transcript-verified, interruptions release the held call, and a repeated request replays the recorded result instead of re-running anything.</p>
+<h2>Install the whole thing with one command</h2>
+<p>On another Mac, this downloads the signed archive, verifies it against the pinned CCFleet key,
+unpacks it under <code>~/.local/share/ccfleet-native-terminal</code>, and caches the terminal
+component where an installed <code>ccfleet</code> looks for it first — so the default
+<code>ccfleet gemini</code> works even before the paired Mac's slot service carries that
+component:</p>
+<pre>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/tools/native_agy/install.sh | bash</pre>
+<p>It also links <code>~/.local/bin/ccfleet-native-terminal</code> for machines without the client.
+Nothing is written outside your home directory, and the script exits without installing if the
+signature or the checksum does not match.</p>
 <h2>Scripted verification</h2>
 <p>The signed <code>--native-check</code> command remains available: it exercises four fixed operations with deterministic model responses and consumes no Google model credits. Its model responses are scripted; a successful run does not by itself establish support for consumer-plan headless wrappers.</p>
 <h2>Consumer-plan risk — read this</h2>
