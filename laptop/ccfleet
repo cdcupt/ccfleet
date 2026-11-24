@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.26"
+CLIENT_VERSION = "0.2.27"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -2960,8 +2960,18 @@ def cmd_openrouter(args: argparse.Namespace) -> int:
     ensure_home()
     env = dict(os.environ)
     env.pop("CCFLEET_OPENROUTER_TOKEN", None)
-    native_proxy_exclusions(env, Path.cwd(), extra)
+    saved_mode = native_proxy_exclusions(env, Path.cwd(), extra)
     settings = native_settings(env, base, token, bare="--bare" in extra)
+    native_options = extra[:extra.index("--")] if "--" in extra else extra
+    flags = {arg.split("=", 1)[0] for arg in native_options}
+    mode_args = []
+    if not flags.intersection({"--permission-mode", "--dangerously-skip-permissions"}):
+        if args.mode is not None:
+            mode_args = ["--permission-mode", args.mode]
+        elif not saved_mode and not flags.intersection(
+                {"--resume", "-r", "--continue", "-c", "--restricted", "--safe-mode"}
+        ):
+            settings["permissions"] = {"defaultMode": "bypassPermissions"}
     tiers = {name: model for name in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
             "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
             "ANTHROPIC_DEFAULT_FABLE_MODEL", "ANTHROPIC_SMALL_FAST_MODEL")}
@@ -2979,7 +2989,7 @@ def cmd_openrouter(args: argparse.Namespace) -> int:
     with tempfile.NamedTemporaryFile(dir=home(), mode="w", suffix=".json") as options:
         json.dump(settings, options)
         options.flush()
-        return subprocess.call([claude, "--settings", options.name, "--model", model, *extra],
+        return subprocess.call([claude, "--settings", options.name, "--model", model, *mode_args, *extra],
                                env=env)
 
 
@@ -3000,8 +3010,9 @@ def add_api_models(settings: dict[str, Any], route: dict[str, Any]) -> None:
     settings["modelPicker"] = {"replaceBuiltInOptions": True, "options": options}
 
 
-def native_proxy_exclusions(env: dict[str, str], project: Path, extra: list[str]) -> None:
-    """Retain native settings.env proxy exclusions before pinning loopback bypass."""
+def native_proxy_exclusions(env: dict[str, str], project: Path, extra: list[str]) -> bool:
+    """Preserve proxy exclusions and report whether loaded settings select a permission mode."""
+    saved_mode = False
     sources = {"user", "project", "local"}
     extra = extra[:extra.index("--")] if "--" in extra else extra
     if "--bare" in extra:
@@ -3034,6 +3045,10 @@ def native_proxy_exclusions(env: dict[str, str], project: Path, extra: list[str]
             if len(raw) > 1024 * 1024:
                 raise ValueError("oversized settings")
             value = json.loads(raw)
+            permissions = value.get("permissions")
+            if isinstance(permissions, dict) and (permissions.get("defaultMode")
+                    or permissions.get("disableBypassPermissionsMode") == "disable"):
+                saved_mode = True
             overrides = value.get("env", {})
             if not isinstance(overrides, dict):
                 raise ValueError("invalid settings")
@@ -3045,6 +3060,7 @@ def native_proxy_exclusions(env: dict[str, str], project: Path, extra: list[str]
         except (OSError, ValueError, AttributeError) as exc:
             raise CliError("could not safely preserve native proxy exclusions; "
                            "check your Claude settings files") from exc
+    return saved_mode
 
 
 def check_managed_route(paths: Optional[list[Path]] = None) -> None:
@@ -3997,6 +4013,9 @@ def parser() -> argparse.ArgumentParser:
     router = sub.add_parser("openrouter", help="run local Claude with Fleet-billed OpenRouter models",
                             description="Enter a Fleet key once to save it privately on this computer. "
                                         "CCFLEET_OPENROUTER_TOKEN overrides the saved key for this run.")
+    router.add_argument("--permission-mode", "--mode", dest="mode", choices=PERMISSION_MODES,
+                        help="native permission mode (fresh default: bypassPermissions, which skips "
+                             "tool approval prompts; use auto or manual to change it)")
     router.add_argument("--forget-key", action="store_true", help="remove the saved Fleet key from this computer")
     router.add_argument("--model", help="OpenRouter model ID")
     router.add_argument("--check", action="store_true", help="show the default, recent models and full catalog without inference")
