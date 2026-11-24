@@ -60,7 +60,11 @@ def test_account_entry_gated_and_reflects_account_specific_pricing(router, local
     assert f'href="{href}"' in page.body
     assert 'id="openrouter"' in page.body
     assert "5%" in page.body
-    assert "0.2.25" in page.body
+    assert "0.2.26" in page.body
+    assert "0.2.27" in page.body
+    assert "1,048,576" in page.body
+    assert "bypassPermissions" in page.body
+    assert "--permission-mode auto" in page.body
     assert "sk-or-" not in page.body
 
     # Active key pill appears once a key exists without exposing the key
@@ -119,7 +123,7 @@ def test_openrouter_page_key_lifecycle_models_cli_and_receipts(router, locale):
     grant(c, "25")
     user = c.browser("alice")
 
-    # 1. Initial GET shows no active key, +5% pricing, $25.00 credit, CLI 0.2.25 instructions
+    # 1. Initial GET shows no active key, +5% pricing, $25.00 credit, CLI 0.2.26/0.2.27 instructions
     initial = user.call("GET", prefix + "/account/openrouter", headers=c.public)
     assert initial.status == 200
     assert initial.getheader("Cache-Control") == "no-store"
@@ -127,12 +131,22 @@ def test_openrouter_page_key_lifecycle_models_cli_and_receipts(router, locale):
     assert "$25.00" in initial.body
     assert "5%" in initial.body
     assert "/openrouter" in initial.body
-    assert "0.2.25" in initial.body
+    assert "0.2.26" in initial.body
+    assert "0.2.27" in initial.body
+    assert "1,048,576" in initial.body
+    assert "bypassPermissions" in initial.body
+    assert "ccfleet update" in initial.body
     assert "ccfleet openrouter --check" in initial.body
+    assert "ccfleet openrouter --forget-key" in initial.body
+    assert "ccfleet openrouter --permission-mode auto" in initial.body
+    assert "CCFLEET_OPENROUTER_TOKEN" in initial.body
     assert "ccfleet openrouter" in initial.body
     assert "/model" in initial.body
+    assert 'id="openrouter-troubleshooting"' in initial.body
     assert ("尚无有效密钥" if locale == "zh" else "No active key") in initial.body
-    assert ("暂无 OpenRouter 请求记录" if locale == "zh" else "No OpenRouter requests yet") in initial.body
+    assert (
+        "暂无 OpenRouter 请求记录" if locale == "zh" else "No OpenRouter requests yet"
+    ) in initial.body
     assert "sk-or-" not in initial.body
 
     # 2. Issue key -> shown ONCE, progressive Copy button present, language switcher safe
@@ -241,3 +255,38 @@ def test_openrouter_catalog_overflow_places_ten_recent_models_first(router):
     assert section.index("example/model-11") < section.index("example/model-02")
     assert section.index("example/model-02") < section.index('class="or-more-models"')
     assert section.index('class="or-more-models"') < section.index("example/model-00")
+
+
+@pytest.mark.parametrize("locale", ["en", "zh"])
+def test_openrouter_first_party_docs_and_guide_reflect_026_and_027(router, locale):
+    c = router
+    prefix = "/" + locale
+    for path, extra_marker in (
+        ("/docs/guide", 'id="openrouter-cli"'),
+        ("/docs/library/docs/public-gateway.html", 'id="openrouter"'),
+        ("/docs/library/docs/index.html", "public-gateway.html#openrouter"),
+    ):
+        conn = http.client.HTTPConnection(*c.server.server_address, timeout=5)
+        try:
+            conn.request("GET", prefix + path, headers=c.public)
+            resp = conn.getresponse()
+            resp.body = resp.read().decode("utf-8")
+        finally:
+            conn.close()
+        assert resp.status == 200
+        _assert_csp_and_locale(resp, locale)
+        assert extra_marker in resp.body
+        assert "0.2.26" in resp.body and "0.2.27" in resp.body
+        if path != "/docs/library/docs/index.html":
+            for marker in (
+                "ccfleet update",
+                "ccfleet openrouter",
+                "--forget-key",
+                "CCFLEET_OPENROUTER_TOKEN",
+                "1,048,576",
+                "bypassPermissions",
+                "ccfleet openrouter --permission-mode auto",
+                "/model",
+            ):
+                assert marker in resp.body, f"Missing {marker!r} on {prefix + path}"
+

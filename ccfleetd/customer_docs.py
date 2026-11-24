@@ -1323,6 +1323,66 @@ def _devin_cli_connection() -> str:
     )
 
 
+def _openrouter_cli_guide() -> str:
+    return (
+        '<h3 id="openrouter-cli">'
+        + label("OpenRouter in local Claude Code (no slot required)",
+                "在本机 Claude Code 中使用 OpenRouter（无需槽位）", inline=True)
+        + "</h3>"
+        + bi(
+            '<p>When OpenRouter is enabled on Fleet, sign in at '
+            '<a href="/account/openrouter">OpenRouter</a> to issue a personal Fleet key. '
+            'The shared upstream provider key stays on the controller. Regular users pay '
+            'actual OpenRouter cost plus 5% from their Fleet wallet; the designated owner '
+            'admin has a $0.00 Fleet wallet charge.</p>'
+            '<p>Run <code>ccfleet update</code> to install signed stable CLI '
+            '<code>0.2.26</code>+, then run <code>ccfleet openrouter</code> in your project '
+            'and enter your personal Fleet key once per computer. Fleet verifies it and saves '
+            'it in an owner-only file so subsequent sessions and <code>--check</code> reuse '
+            'it automatically. If a saved key is revoked, an interactive terminal prompts for '
+            'a replacement. Use <code>ccfleet openrouter --forget-key</code> to remove only '
+            'the local copy (revocation stays a separate action on '
+            '<a href="/account/openrouter">/account/openrouter</a>), or set '
+            '<code>CCFLEET_OPENROUTER_TOKEN</code> to override the saved key for that process '
+            'only.</p>',
+            '<p>Fleet 启用 OpenRouter 后，可登录<a href="/account/openrouter">OpenRouter</a>'
+            '生成个人 Fleet 密钥。共享的上游服务商密钥始终留在控制器端。普通用户按 OpenRouter '
+            '实际用量费加 5% 从 Fleet 余额扣费，指定的管理员账户 Fleet 余额扣费 $0.00。</p>'
+            '<p>运行 <code>ccfleet update</code> 升级至签名稳定版 CLI <code>0.2.26</code>+，'
+            '再在项目目录运行 <code>ccfleet openrouter</code> 并输入一次个人 Fleet 密钥。'
+            '每台电脑验证后会保存在仅限本人可读的文件中，后续会话和 <code>--check</code> '
+            '自动复用；若已保存的密钥被撤销，交互式终端会提示输入新密钥替换。'
+            '<code>ccfleet openrouter --forget-key</code> 仅删除本地副本（撤销密钥请在'
+            '<a href="/account/openrouter">/account/openrouter</a> 另行操作），'
+            '<code>CCFLEET_OPENROUTER_TOKEN</code> 仅覆盖当前单次进程。</p>',
+        )
+        + "<pre><code>ccfleet update\nccfleet openrouter\nccfleet openrouter --check\n"
+        "ccfleet openrouter --model deepseek/deepseek-v4.1-flash\n"
+        "ccfleet openrouter --forget-key</code></pre>"
+        + bi(
+            '<p><code>/model</code> switches models, your last used model becomes the next '
+            'default, ten recent models are shown first, and <code>--model</code> accepts any '
+            'enabled model ID. Introduced in <code>0.2.26</code>, the current Flash/Pro '
+            'catalog has a verified 1,048,576-token context window handled by the CLI. '
+            'Starting in <code>0.2.27</code>, fresh local OpenRouter sessions default to '
+            'native <code>bypassPermissions</code> mode (local edits and shell commands can '
+            'run without approval prompts while native managed policy still applies); use '
+            '<code>ccfleet openrouter --permission-mode auto</code> for auto mode. '
+            '<a href="/docs/library/docs/public-gateway.html#openrouter">Full OpenRouter '
+            'guide &amp; troubleshooting</a>.</p>',
+            '<p>会话中用 <code>/model</code> 切换模型，上次使用的模型成为下次默认，'
+            '最近使用的 10 个模型排在最前，<code>--model</code> 接受任意已启用的模型 ID。'
+            '自 <code>0.2.26</code> 起，当前 Flash/Pro 目录由 CLI 自动处理经验证的 '
+            '1,048,576 token 上下文窗口。自 <code>0.2.27</code> 起，新建本地 OpenRouter '
+            '会话默认使用原生 <code>bypassPermissions</code> 模式（本地编辑和 shell 命令可'
+            '无需逐次批准执行，同时原生托管策略仍生效）；如需 auto 模式请运行 '
+            '<code>ccfleet openrouter --permission-mode auto</code>。详见'
+            '<a href="/docs/library/docs/public-gateway.html#openrouter">完整 OpenRouter '
+            '说明与排查</a>。</p>',
+        )
+    )
+
+
 def _client_tools() -> str:
     """Current local controls; commands are shared between the language pages."""
     return (
@@ -1330,6 +1390,7 @@ def _client_tools() -> str:
         + bi("<h2>Everyday commands</h2>", "<h2>日常操作</h2>")
         + _client_command_reference()
         + _devin_cli_connection()
+        + _openrouter_cli_guide()
         + bi(
             "<p>Use the menu to start a new conversation, continue your last one, or "
             "resume a saved conversation. Your native Claude history stays private on this "

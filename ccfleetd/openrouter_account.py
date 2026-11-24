@@ -90,6 +90,8 @@ font-size:12px;font-weight:650;font-variant-numeric:tabular-nums}
 .or-callout{padding:14px 16px;border-radius:12px;border:1px solid var(--acc-line);
 background:var(--acc-soft);font-size:13px;line-height:1.68;color:var(--ink)}
 .or-callout strong{color:var(--ink)}
+.or-callout p{margin:0 0 8px;font-size:13px;line-height:1.68;color:var(--ink)}
+.or-callout p:last-child{margin:0}
 .or-sheet{overflow-x:auto;max-width:100%;min-width:0;border:1px solid var(--rule-soft);
 border-radius:12px}
 .or-table{width:100%;min-width:440px;border-collapse:collapse;font-size:13px}
@@ -151,6 +153,7 @@ color:var(--muted)}
 .or-details-body{padding:14px 20px 18px;display:grid;gap:10px;font-size:13px;line-height:1.7;
 color:var(--muted)}
 .or-details-body p{margin:0}
+.or-details-body strong{color:var(--ink)}
 .or-more-models{margin-top:4px;border:1px solid var(--rule-soft);border-radius:12px;
 background:var(--surface-subtle)}
 .or-more-models>summary{padding:12px 16px;font-size:13px;font-weight:600;cursor:pointer}
@@ -289,11 +292,17 @@ def entry(cfg: Any, account: Optional[Mapping[str, Any]], store: Any) -> str:
         )
         + "</h2><p>"
         + label(
-            "Use offered OpenRouter models directly from your computer with a private Fleet "
-            "key—no slot or Claude subscription required. CLI 0.2.25 launches your last used "
-            "model and puts your 10 recent models first in /model.",
+            "Use offered OpenRouter models directly from your computer with a personal Fleet "
+            "key—no slot or Claude subscription required. CLI 0.2.26 verifies and saves your "
+            "key privately once per computer, launches your last used model, puts 10 recent "
+            "models first in /model, and sets the verified 1,048,576-token context window for "
+            "the Flash/Pro catalog. Starting in CLI 0.2.27, fresh sessions default to "
+            "bypassPermissions (use --permission-mode auto for auto mode).",
             "使用个人 Fleet 密钥在本机直接调用可选 OpenRouter 模型，无需槽位或 Claude 订阅。"
-            "CLI 0.2.25 启动时默认沿用上次使用的模型，并在 /model 中优先显示最近使用的 10 个模型。",
+            "CLI 0.2.26 会在每台电脑验证并私有保存密钥一次，启动时沿用上次使用的模型，"
+            "在 /model 中优先显示最近使用的 10 个模型，并为 Flash/Pro 目录自动配置经验证的 "
+            "1,048,576 token 上下文窗口。自 CLI 0.2.27 起，新建会话默认使用 "
+            "bypassPermissions（如需 auto 模式请加 --permission-mode auto）。",
             inline=True,
         )
         + '</p><div class="or-entry-actions">'
@@ -311,13 +320,17 @@ def _signed_out_page(cfg: Any) -> usersite.Outcome:
         + label("Sign in for OpenRouter", "登录以使用 OpenRouter", inline=True)
         + "</h1><p>"
         + bi(
-            "Use local Claude Code with offered OpenRouter models through your own private "
+            "Use local Claude Code with offered OpenRouter models through your own personal "
             f"Fleet credential at {code_base}—no slot or Claude subscription required. "
-            "Regular accounts pay OpenRouter’s actual usage cost plus a 5% service fee from "
-            "their Fleet balance. Fleet’s upstream OpenRouter credential stays server-side.",
+            "In CLI 0.2.26+, enter your key once per computer and Fleet saves it in an "
+            "owner-only file after verification. Regular accounts pay actual OpenRouter cost "
+            "plus 5% from their Fleet wallet; the designated owner admin has a $0.00 Fleet "
+            "wallet charge. The shared provider key stays on the controller.",
             f"通过你自己的个人 Fleet 密钥在本地 Claude Code 中使用可选 OpenRouter 模型，接口地址为 "
-            f"{code_base}，无需槽位或 Claude 订阅。普通账户按 OpenRouter 实际用量费加 5% 服务费"
-            "从 Fleet 余额扣款，Fleet 的上游 OpenRouter 凭证始终保存在服务器端。",
+            f"{code_base}，无需槽位或 Claude 订阅。在 CLI 0.2.26 及以上版本中，每台电脑只需"
+            "输入一次密钥，Fleet 验证后会保存在仅限本人可读的文件中。普通账户按 OpenRouter "
+            "实际用量费加 5% 从 Fleet 余额扣费，指定的管理员账户 Fleet 余额扣费 $0.00；"
+            "共享上游服务商密钥始终留在控制器端。",
             inline=True,
         )
         + '</p><div class="sign-in-action">'
@@ -570,12 +583,18 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
                 copy_zh="复制密钥",
             )
             + '<p class="or-note">'
-            + label(
-                "Next: run ccfleet openrouter in your project directory and enter this key at "
-                "the hidden prompt, or store it in your secret manager as "
-                "CCFLEET_OPENROUTER_TOKEN.",
-                "下一步：在项目目录运行 ccfleet openrouter 并在隐藏提示中输入此密钥，"
-                "或通过密钥管理器保存为 CCFLEET_OPENROUTER_TOKEN。",
+            + bi(
+                "Next: run <code>ccfleet update</code>, then <code>ccfleet openrouter</code> "
+                "in your project and enter this personal Fleet key once at the hidden prompt. "
+                "Fleet verifies it and saves it in an owner-only file so subsequent sessions "
+                "and <code>--check</code> reuse it automatically. "
+                "<code>CCFLEET_OPENROUTER_TOKEN</code> overrides the saved key for that "
+                "process only.",
+                "下一步：先运行 <code>ccfleet update</code>，再在项目目录运行 "
+                "<code>ccfleet openrouter</code> 并在隐藏提示中输入一次此个人 Fleet 密钥。"
+                "Fleet 验证后会将其保存在仅限本人可读的文件中，后续会话和 "
+                "<code>--check</code> 会自动复用。<code>CCFLEET_OPENROUTER_TOKEN</code> "
+                "仅覆盖当前单次进程。",
                 inline=True,
             )
             + "</p></section>"
@@ -621,6 +640,20 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
     )
 
     code_base = f"<code>{escape(api_base)}</code>"
+    local_vs_revoke = (
+        '<p class="or-note">'
+        + bi(
+            "Local removal vs. revocation: <code>ccfleet openrouter --forget-key</code> "
+            "removes only the saved owner-only file on that computer. Revoking or rotating "
+            "on this page is a separate server-side action; if a saved key is revoked, an "
+            "interactive terminal prompts for a replacement automatically.",
+            "删除本地副本与撤销密钥相互独立：<code>ccfleet openrouter --forget-key</code> "
+            "只删除该电脑上仅限本人可读的本地文件；在此页面撤销或更换会立即令旧密钥在服务端失效。"
+            "在交互式终端中遇到已撤销的本地密钥时，CLI 会自动提示输入新密钥替换。",
+            inline=True,
+        )
+        + "</p>"
+    )
     credential_card = (
         '<section class="or-card" id="openrouter-key">'
         '<div class="or-card-head"><h2>'
@@ -628,86 +661,152 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
         + f"</h2>{key_pill}</div>"
         '<p class="or-card-sub">'
         + bi(
-            f"Each signed-in user gets a private credential scoped strictly to {code_base}. "
-            "Fleet’s upstream OpenRouter API key remains server-side and is never sent to "
-            "your browser or computer. This key cannot access Claude slots.",
+            f"Each signed-in user gets a personal credential scoped strictly to {code_base}. "
+            "The shared upstream OpenRouter provider key stays on the controller and is never "
+            "sent to your browser or computer. This key cannot access Claude slots.",
             f"每位登录用户都有独立的个人密钥，仅限访问 {code_base}。"
-            "Fleet 的上游 OpenRouter 凭证始终保留在服务器端，绝不会发送到你的浏览器或电脑。"
+            "共享的上游 OpenRouter 服务商密钥始终留在控制器端，绝不会发送到你的浏览器或电脑。"
             "此密钥无法访问 Claude 槽位。",
             inline=True,
         )
         + '</p><div class="or-key-actions">'
         + _action_form("create", create_en, create_zh, "primary")
         + _action_form("revoke", "Revoke access", "撤销密钥", "or-btn-revoke")
-        + f"</div>{key_hint}</section>"
+        + f"</div>{key_hint}{local_vs_revoke}</section>"
     )
 
-    # CLI 0.2.25 Quick Start card
+    # CLI 0.2.26 / 0.2.27 Quick Start card
+    flash_pro_window = set(service.models) <= {
+        "deepseek/deepseek-v4.1-flash",
+        "deepseek/deepseek-v4-pro",
+    }
     cli_card = (
         '<section class="or-card" id="openrouter-cli">'
         '<div class="or-card-head"><h2>'
         + label("Run in local Claude Code", "在本机 Claude Code 中运行", inline=True)
-        + '</h2><span class="or-tag">CLI 0.2.25+</span></div>'
+        + '</h2><span class="or-tag">CLI 0.2.26 / 0.2.27</span></div>'
         '<p class="or-card-sub">'
-        + label(
-            "No slot or Claude subscription needed. Commands never include your key—paste it at "
-            "the hidden prompt or supply CCFLEET_OPENROUTER_TOKEN from your secret manager.",
-            "无需槽位或 Claude 订阅。命令中不包含密钥——请在隐藏提示中粘贴，或通过密钥管理器设置 "
-            "CCFLEET_OPENROUTER_TOKEN。",
+        + bi(
+            "No slot or Claude subscription needed. Enter your personal Fleet key once per "
+            "computer—Fleet verifies it and saves it in an owner-only file so subsequent "
+            "sessions and <code>--check</code> reuse it. <code>CCFLEET_OPENROUTER_TOKEN</code> "
+            "overrides the saved key for that process only. Commands never include your key.",
+            "无需槽位或 Claude 订阅。每台电脑只需输入一次个人 Fleet 密钥，Fleet 验证后会将其保存在"
+            "仅限本人可读的文件中，后续会话与 <code>--check</code> 会自动复用。"
+            "<code>CCFLEET_OPENROUTER_TOKEN</code> 仅覆盖当前单次进程，命令中绝不包含密钥。",
             inline=True,
         )
         + '</p><ol class="or-steps">'
         '<li class="or-step"><h3>'
-        + label("Update to CC Fleet CLI 0.2.25", "升级到 CC Fleet CLI 0.2.25", inline=True)
+        + label(
+            "Update to signed stable CLI 0.2.26+ (0.2.27 for bypass default)",
+            "升级至签名稳定版 CLI 0.2.26+（0.2.27 起默认 bypass 模式）",
+            inline=True,
+        )
         + "</h3>"
         + _code_box("Terminal · Upgrade CLI", "终端 · 升级 CLI", "ccfleet update")
-        + '</li><li class="or-step"><h3>'
-        + label(
-            "Verify your catalog and pricing (no model charge)",
-            "查看可用模型与计费方式（不产生模型费用）",
-            inline=True,
-        )
-        + "</h3>"
-        + _code_box("Terminal · Check catalog", "终端 · 查看模型列表", "ccfleet openrouter --check")
-        + '</li><li class="or-step"><h3>'
-        + label("Start Claude Code in your project", "在项目目录启动 Claude Code", inline=True)
-        + "</h3>"
-        + _code_box("Terminal · Launch", "终端 · 启动", "ccfleet openrouter")
-        + '<div class="or-callout">'
+        + '<p class="or-note">'
         + bi(
-            f"<strong>CLI 0.2.25 model memory:</strong> <code>ccfleet openrouter</code> "
-            f"automatically starts your <strong>last used model</strong> "
-            f"(next default: <code>{escape(default_model)}</code>). Inside Claude Code, "
-            f"type <code>/model</code> to switch—your <strong>10 most recently used "
-            f"models</strong> appear first.",
-            f"<strong>CLI 0.2.25 模型记忆：</strong><code>ccfleet openrouter</code> 会自动启动你"
-            f"<strong>上次使用的模型</strong>（下次默认：<code>{escape(default_model)}</code>）。"
-            f"在对话中输入 <code>/model</code> 切换模型时，你<strong>最近使用的 10 个模型</strong>"
-            f"会排在最前面。",
-            inline=True,
-        )
-        + "</div><p>"
-        + label(
-            "Or launch a specific offered model directly:",
-            "也可以在启动时直接指定某个可用模型：",
+            "CLI <code>0.2.26</code> added per-computer saved credentials (owner-only file) "
+            "and the verified 1,048,576-token context window for the Flash/Pro catalog. "
+            "CLI <code>0.2.27</code> sets fresh local OpenRouter sessions to native "
+            "<code>bypassPermissions</code> mode by default.",
+            "CLI <code>0.2.26</code> 新增每台电脑私有保存密钥及 Flash/Pro 目录经验证的 "
+            "1,048,576 token 上下文窗口；CLI <code>0.2.27</code> 起，新建本地 OpenRouter "
+            "会话默认以原生 <code>bypassPermissions</code> 模式启动。",
             inline=True,
         )
         + "</p>"
-        + _code_box(
-            "Terminal · Pick a model explicitly",
-            "终端 · 指定模型启动",
-            f"ccfleet openrouter --model {example_model}",
-        )
-        + "</li></ol>"
-        '<p class="or-note">'
+        + '</li><li class="or-step"><h3>'
         + label(
-            "Use ccfleet claude for your private Claude subscription slots. OpenRouter supports "
-            "text and local Claude Code tools; choose models with tool-calling support.",
-            "自有 Claude 订阅槽位请继续使用 ccfleet claude。OpenRouter 支持文本与本地 "
-            "Claude Code 工具，请选择兼容工具调用的模型。",
+            "Start Claude Code in your project (enter key once per computer)",
+            "在项目目录启动 Claude Code（每台电脑输入一次密钥）",
             inline=True,
         )
-        + "</p></section>"
+        + "</h3>"
+        + _code_box("Terminal · Launch", "终端 · 启动", "ccfleet openrouter")
+        + "<p>"
+        + bi(
+            "On first run, paste your personal Fleet key at the hidden prompt. Fleet verifies "
+            "it against <code>/openrouter/v1/models</code> and saves it in an owner-only file "
+            "(mode 0600); subsequent runs and <code>ccfleet openrouter --check</code> reuse "
+            "it automatically. If a saved key is revoked, an interactive terminal prompts for "
+            "a replacement.",
+            "首次运行时在隐藏提示中粘贴个人 Fleet 密钥。Fleet 通过 "
+            "<code>/openrouter/v1/models</code> 验证后会保存到仅限本人可读的文件（0600）；"
+            "后续启动和 <code>ccfleet openrouter --check</code> 均会自动复用。"
+            "若已保存的密钥被撤销，交互式终端会直接提示输入新密钥替换。",
+            inline=True,
+        )
+        + "</p>"
+        + '<div class="or-callout">'
+        + bi(
+            f"<p><strong>Model memory &amp; 1M context (CLI 0.2.26+):"
+            f"</strong> <code>ccfleet openrouter</code> starts your <strong>last used "
+            f"model</strong> (next default: <code>{escape(default_model)}</code>), "
+            f"<code>/model</code> switches models with your <strong>10 recent models "
+            f"first</strong>, and <code>--model</code> accepts any enabled model ID. The "
+            f"current Flash/Pro catalog has a verified <strong>1,048,576-token</strong> "
+            f"context window handled by the CLI.</p>"
+            f"<p><strong>Default permissions (CLI 0.2.27+):</strong> fresh "
+            f"local OpenRouter sessions start in native <code>bypassPermissions</code> mode "
+            f"by default—local edits and shell commands can run without approval prompts, "
+            f"while native managed policy still applies. Run "
+            f"<code>ccfleet openrouter --permission-mode auto</code> for a session using "
+            f"auto mode.</p>",
+            f"<p><strong>模型记忆与 1M 上下文（CLI 0.2.26+）：</strong>"
+            f"<code>ccfleet openrouter</code> 默认启动你<strong>上次使用的模型</strong>"
+            f"（下次默认：<code>{escape(default_model)}</code>），<code>/model</code> "
+            f"切换模型时将<strong>最近使用的 10 个模型排在最前</strong>，<code>--model</code> "
+            f"接受任意已启用的模型 ID。当前 Flash/Pro 目录由 CLI 自动配置经验证的 "
+            f"<strong>1,048,576 token</strong> 上下文窗口。</p>"
+            f"<p><strong>默认权限模式（CLI 0.2.27+）：</strong>新建本地 "
+            f"OpenRouter 会话默认以原生 <code>bypassPermissions</code> 模式启动——本地文件编辑"
+            f"与 shell 命令可无需逐次批准直接执行，同时原生托管策略依然生效。如需使用 auto "
+            f"模式，请运行 <code>ccfleet openrouter --permission-mode auto</code>。</p>",
+        )
+        + "</div>"
+        + '</li><li class="or-step"><h3>'
+        + label(
+            "Check catalog, switch modes, pick a model, or forget the local key",
+            "查看目录、选择 auto 模式、指定模型或清除本地密钥",
+            inline=True,
+        )
+        + "</h3>"
+        + _code_box(
+            "Terminal · Check catalog & pricing (reuses saved key, no inference)",
+            "终端 · 查看模型与计费（复用本地密钥，不产生费用）",
+            "ccfleet openrouter --check",
+        )
+        + _code_box(
+            "Terminal · Start in auto permission mode (CLI 0.2.27+)",
+            "终端 · 以 auto 权限模式启动（CLI 0.2.27+）",
+            "ccfleet openrouter --permission-mode auto",
+        )
+        + _code_box(
+            "Terminal · Launch an enabled model ID directly",
+            "终端 · 指定已启用的模型 ID 启动",
+            f"ccfleet openrouter --model {example_model}",
+        )
+        + _code_box(
+            "Terminal · Remove saved local key on this computer",
+            "终端 · 删除本机保存的密钥副本",
+            "ccfleet openrouter --forget-key",
+        )
+        + '<p class="or-note">'
+        + bi(
+            "<code>--forget-key</code> removes only the saved local file on this computer; "
+            "use <strong>Revoke access</strong> above to invalidate the key on Fleet. "
+            "Use <code>ccfleet claude</code> for your private Claude subscription slots. "
+            "OpenRouter supports text and local Claude Code tools; choose models with "
+            "tool-calling support.",
+            "<code>--forget-key</code> 仅删除本机保存的密钥文件；如需在 Fleet 服务端立即作废，"
+            "请使用上方的<strong>撤销密钥</strong>。自有 Claude 订阅槽位请继续使用 "
+            "<code>ccfleet claude</code>。OpenRouter 支持文本与本地 Claude Code 工具，"
+            "请选择兼容工具调用的模型。",
+            inline=True,
+        )
+        + "</p></li></ol></section>"
     )
 
     # Offered models & recent-10 catalog card
@@ -726,6 +825,13 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
             inline=True,
         )
     )
+    window_badge = (
+        '<span class="or-tag covered">'
+        + label("1,048,576 context", "1,048,576 上下文", inline=True)
+        + "</span>"
+        if flash_pro_window
+        else ""
+    )
     overflow_html = ""
     if overflow_models:
         overflow_html = (
@@ -743,15 +849,19 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
         '<section class="or-card" id="openrouter-models">'
         '<div class="or-card-head"><h2>'
         + label("Offered models", "可用模型", inline=True)
-        + f'</h2><span class="or-tag">{recent_summary}</span></div>'
+        + f'</h2><div class="or-badges"><span class="or-tag">{recent_summary}</span>'
+        + f"{window_badge}</div></div>"
         '<p class="or-card-sub">'
-        + label(
-            "Ordered exactly like /model in CLI 0.2.25: up to 10 recently used models appear "
-            "first, followed by the remaining catalog. Ceilings cap upstream provider pricing; "
-            "actual billing uses OpenRouter’s reported generation cost.",
-            "排序与 CLI 0.2.25 的 /model 完全一致：最近使用的最多 10 个模型排在最前，"
-            "其余模型按目录顺序排列。价格上限用于限制上游服务商最高单价；实际按 OpenRouter "
-            "报告的生成费用结算。",
+        + bi(
+            "Ordered like <code>/model</code> in CLI 0.2.26+: up to 10 recently used models "
+            "appear first, followed by the remaining catalog, and <code>--model</code> accepts "
+            "any enabled model ID below. The current Flash/Pro catalog uses a verified "
+            "1,048,576-token context window handled by the CLI. Ceilings cap upstream provider "
+            "pricing; actual billing uses OpenRouter’s reported generation cost.",
+            "排序与 CLI 0.2.26+ 的 <code>/model</code> 一致：最近使用的最多 10 个模型排在最前，"
+            "其余模型按目录顺序排列，<code>--model</code> 接受下方任意已启用模型 ID。"
+            "当前 Flash/Pro 目录由 CLI 自动处理经验证的 1,048,576 token 上下文窗口。"
+            "价格上限用于限制上游服务商最高单价；实际按 OpenRouter 报告的生成费用结算。",
             inline=True,
         )
         + "</p>"
@@ -927,10 +1037,11 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
         + label("Security & data boundary", "安全与数据边界", inline=True)
         + "</h3><ul><li>"
         + label(
-            "Operator credential stays server-side: Fleet signs upstream OpenRouter requests on "
-            "the server; your computer only uses your revocable Fleet key.",
-            "运营方凭证仅存服务器端：Fleet 在服务器端向 OpenRouter 发起认证，"
-            "你的电脑仅使用可随时撤销的个人 Fleet 密钥。",
+            "Shared provider key stays on the controller: Fleet authenticates upstream "
+            "OpenRouter requests server-side; your computer only saves your verified personal "
+            "Fleet key in an owner-only file (mode 0600).",
+            "共享服务商密钥留在控制器端：Fleet 在服务器端向 OpenRouter 发起认证，"
+            "你的电脑仅在仅限本人可读的文件（0600）中保存已验证的个人 Fleet 密钥。",
             inline=True,
         )
         + "</li><li>"
@@ -940,10 +1051,16 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
             inline=True,
         )
         + "</li><li>"
-        + label(
-            "Tool execution, approvals, and saved files stay on your computer. Provider-hosted "
-            "web tools are disabled on this route.",
-            "工具执行、授权和已保存的文件都留在你的电脑上。此路由不启用服务商托管的网页工具。",
+        + bi(
+            "Tool execution and saved files stay on your computer. Starting in CLI "
+            "<code>0.2.27</code>, fresh sessions default to <code>bypassPermissions</code> "
+            "(local edits and shell commands can run without prompts; native managed policy "
+            "still applies; pass <code>--permission-mode auto</code> for auto mode). "
+            "Provider-hosted web tools are disabled on this route.",
+            "工具执行和已保存的文件都留在你的电脑上。自 CLI <code>0.2.27</code> 起，新建会话"
+            "默认使用 <code>bypassPermissions</code>（本地编辑与 shell 命令可无需逐次确认执行，"
+            "原生托管策略仍生效；加 <code>--permission-mode auto</code> 可启用 auto 模式）。"
+            "此路由不启用服务商托管的网页工具。",
             inline=True,
         )
         + "</li></ul></aside>"
@@ -969,12 +1086,16 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
             inline=True,
         )
         + "</p><p>"
-        + label(
-            "Personal model recency: only settled requests for your own Fleet account update "
-            "your 10-model recent list. CLI 0.2.25 automatically starts with your most recently "
-            "used offered model and shows recent models first in /model.",
-            "个人最近模型：只有你自己账户的已结算请求会更新最近 10 个模型列表。CLI 0.2.25 "
-            "会自动以上次使用的可用模型启动，并在 /model 中将最近模型排在最前。",
+        + bi(
+            "Personal model recency &amp; context: only settled requests for your own Fleet "
+            "account update your 10-model recent list. CLI <code>0.2.26</code>+ starts with "
+            "your last used offered model, shows 10 recent models first in <code>/model</code>, "
+            "and configures the verified 1,048,576-token context window for the Flash/Pro "
+            "catalog.",
+            "个人最近模型与上下文：只有你自己账户的已结算请求会更新最近 10 个模型列表。"
+            "CLI <code>0.2.26</code>+ 会自动以上次使用的可用模型启动，在 <code>/model</code> "
+            "中优先显示最近 10 个模型，并为 Flash/Pro 目录自动配置经验证的 1,048,576 token "
+            "上下文窗口。",
             inline=True,
         )
         + '</p><p><a href="/docs/library/docs/public-gateway.html#openrouter">'
@@ -984,6 +1105,67 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
             inline=True,
         )
         + "</a></p></div></details>"
+    )
+
+    troubleshooting_card = (
+        '<details class="or-details" id="openrouter-troubleshooting"><summary>'
+        + label("Troubleshooting OpenRouter", "OpenRouter 常见问题排查", inline=True)
+        + '</summary><div class="or-details-body"><p>'
+        + bi(
+            "<strong>Saved key rejected (HTTP 401):</strong> If you revoked or rotated your "
+            "key here, CLI <code>0.2.26</code>+ detects the 401 in an interactive terminal "
+            "and prompts immediately for a replacement key to update your local file.",
+            "<strong>本地密钥被拒绝（HTTP 401）：</strong>在此页面撤销或更换密钥后，"
+            "CLI <code>0.2.26</code>+ 在交互式终端检测到 401 时会直接提示输入新密钥"
+            "并更新本地文件。",
+            inline=True,
+        )
+        + "</p><p>"
+        + bi(
+            "<strong>Non-interactive shell or script:</strong> Run "
+            "<code>ccfleet openrouter --check</code> once in an interactive terminal to save "
+            "your verified key privately, or set <code>CCFLEET_OPENROUTER_TOKEN</code> for "
+            "that process only (it is never written to disk).",
+            "<strong>非交互终端或脚本：</strong>先在交互式终端运行一次 "
+            "<code>ccfleet openrouter --check</code> 以私有保存已验证密钥，"
+            "或仅为当前进程设置 <code>CCFLEET_OPENROUTER_TOKEN</code>（不会写入磁盘）。",
+            inline=True,
+        )
+        + "</p><p>"
+        + bi(
+            "<strong>Forget local copy vs. revoke:</strong> Run "
+            "<code>ccfleet openrouter --forget-key</code> to delete the owner-only file on "
+            "this computer. Revoking access on this page is a separate action that invalidates "
+            "the key on Fleet across all computers.",
+            "<strong>清除本地副本与服务端撤销：</strong>运行 "
+            "<code>ccfleet openrouter --forget-key</code> 仅删除本机保存的文件；"
+            "在此页面点击“撤销密钥”才会让该密钥在所有电脑的 Fleet 服务端立即失效。",
+            inline=True,
+        )
+        + "</p><p>"
+        + bi(
+            "<strong>Approval prompts (CLI 0.2.27+):</strong> Fresh OpenRouter sessions start "
+            "in native <code>bypassPermissions</code> mode by default (native managed policy "
+            "still applies). Run <code>ccfleet openrouter --permission-mode auto</code> to "
+            "use auto mode for a session.",
+            "<strong>权限审批提示（CLI 0.2.27+）：</strong>新建 OpenRouter 会话默认使用原生 "
+            "<code>bypassPermissions</code> 模式（原生托管策略仍生效）。如需在会话中使用 "
+            "auto 模式，请运行 <code>ccfleet openrouter --permission-mode auto</code>。",
+            inline=True,
+        )
+        + "</p><p>"
+        + bi(
+            "<strong>Insufficient credit (HTTP 402) or model rejected:</strong> Regular "
+            "accounts need enough available Fleet credit to cover the pre-dispatch hold "
+            "(actual cost + 5%; top up via <a href=\"/account/topup\">Add credit</a>). Run "
+            "<code>ccfleet openrouter --check</code> to see currently enabled model IDs.",
+            "<strong>余额不足（HTTP 402）或模型不可用：</strong>普通账户需有足够的可用 "
+            "Fleet 余额以覆盖请求前预留（实际费用 + 5%，可通过"
+            "<a href=\"/account/topup\">充值余额</a>充值）。运行 "
+            "<code>ccfleet openrouter --check</code> 查看当前启用的模型 ID。",
+            inline=True,
+        )
+        + "</p></div></details>"
     )
 
     body = (
@@ -1005,7 +1187,8 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
         + issued_banner
         + '<div class="or-grid">'
         + f'<div class="or-main">{credential_card}{cli_card}{models_card}{receipts_card}</div>'
-        + f'<div class="or-rail">{billing_card}{trust_card}{details_card}</div>'
+        + f'<div class="or-rail">{billing_card}{trust_card}{details_card}'
+        + f"{troubleshooting_card}</div>"
         + "</div></section>"
     )
 
