@@ -2984,11 +2984,18 @@ def cmd_openrouter(args: argparse.Namespace) -> int:
     if remember:
         write_private_profile("openrouter.json", {"token": token})
         print("Saved your Fleet key for future OpenRouter sessions on this computer.", file=sys.stderr)
+    images = args.command == "openrouter-images"
+    if images:
+        rows = [row for row in rows if isinstance(row.get("input_modalities"), list)
+                and "image" in row["input_modalities"]]
+        if not rows:
+            raise CliError("This Fleet gateway offers no image-enabled models. "
+                           "Use ccfleet openrouter for text.")
     models = [row["id"] for row in rows]
     recent = [row["id"] for row in rows if row.get("fleet_recent") is True]
     model = args.model or models[0]
     if model not in models:
-        raise CliError("choose an offered OpenRouter model: " + ", ".join(models))
+        raise CliError("choose an offered OpenRouter model for this input mode: " + ", ".join(models))
     if args.check:
         print("Default: " + models[0])
         if recent:
@@ -3011,15 +3018,29 @@ def cmd_openrouter(args: argparse.Namespace) -> int:
                 {"--resume", "-r", "--continue", "-c", "--restricted", "--safe-mode"}
         ):
             settings["permissions"] = {"defaultMode": "bypassPermissions"}
-    tiers = {name: model for name in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    launch_env = {name: model for name in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
             "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
             "ANTHROPIC_DEFAULT_FABLE_MODEL", "ANTHROPIC_SMALL_FAST_MODEL")}
+    if images:
+        launch_env["ANTHROPIC_CUSTOM_HEADERS"] = "X-CCFleet-Input: images"
+        print("Image input enabled, including images in resumed conversation history.", file=sys.stderr)
+    else:
+        # Absolute gitignore-style rules cover Read calls outside the project too.
+        extensions = ("png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif",
+                      "tif", "tiff", "avif", "pdf")
+        patterns = ["".join(f"[{c}{c.upper()}]" for c in ext) for ext in extensions]
+        settings.setdefault("permissions", {})["deny"] = [f"Read(//**/*.{p})" for p in patterns]
+        if "--append-system-prompt" not in flags:
+            mode_args += ["--append-system-prompt", "Use text tool results on this route. "
+                          "Skip image reads and screenshots. Use logs, DOM text or accessibility "
+                          "snapshots; ask the user if visual inspection is needed."]
+        print("Text-only session. Use ccfleet openrouter-images to enable images.", file=sys.stderr)
     # These two offered DeepSeek models share the same OpenRouter context length.
     # A session-wide override is valid only while every model in its picker matches.
     if set(models) <= {"deepseek/deepseek-v4.1-flash", "deepseek/deepseek-v4-pro"}:
-        tiers["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "1048576")
-    settings["env"].update(tiers)
-    env.update(tiers)
+        launch_env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "1048576")
+    settings["env"].update(launch_env)
+    env.update(launch_env)
     settings["modelPicker"] = {"replaceBuiltInOptions": True, "options": [
         {"model": m, "label": m + (" · Recent" if m in recent else "") + " · " + price}
         for m in models]}
@@ -4049,8 +4070,11 @@ def parser() -> argparse.ArgumentParser:
                        help="explicitly approve ending this computer's old live-folder sessions")
     setup.add_argument("--server", default=os.environ.get("CCFLEET_SERVER", DEFAULT_SERVER),
                        help="server used only when pairing a new computer")
-    router = sub.add_parser("openrouter", help="run local Claude with Fleet-billed OpenRouter models",
-                            description="Enter a Fleet key once to save it privately on this computer. "
+    router = sub.add_parser("openrouter", aliases=["openrouter-images"],
+                            help="run OpenRouter text-only; use openrouter-images to enable images",
+                            description="ccfleet openrouter starts a text-only session. "
+                                        "ccfleet openrouter-images enables images for one session. "
+                                        "Enter a Fleet key once to save it privately on this computer. "
                                         "CCFLEET_OPENROUTER_TOKEN overrides the saved key for this run.")
     router.add_argument("--permission-mode", "--mode", dest="mode", choices=PERMISSION_MODES,
                         help="native permission mode (fresh default: bypassPermissions, which skips "
@@ -4342,7 +4366,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_login(args)
         if args.command == "setup":
             return cmd_setup(args)
-        if args.command == "openrouter":
+        if args.command in ("openrouter", "openrouter-images"):
             return cmd_openrouter(args)
         if args.command == "gateway":
             return cmd_gateway(args)

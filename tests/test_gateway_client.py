@@ -596,6 +596,31 @@ def test_openrouter_launch_uses_account_key_and_catalog_without_slot(client, mon
     assert [v["model"] for v in settings["modelPicker"]["options"]] == ids
 
 
+def test_openrouter_input_modes_are_session_scoped(client, monkeypatch, capsys):
+    monkeypatch.setenv("CCFLEET_OPENROUTER_TOKEN", "ccf_or_" + "x" * 43)
+    monkeypatch.setenv("ANTHROPIC_CUSTOM_HEADERS", "X-CCFleet-Input: images")
+    main = client.loaded["main"]
+    rows = [{"id": "test/text"}, {"id": "test/vision", "input_modalities": ["text", "image"]}]
+    monkeypatch.setitem(client.scope, "api_json", lambda *a, **kw: {"data": rows})
+    assert main(["openrouter-images", "--model", "test/text"]) == 2
+    assert main(["openrouter-images", "--check"]) == 0
+    assert "Default: test/vision" in capsys.readouterr().out
+    assert not client.calls
+    assert main(["openrouter-images"]) == 0
+    command, kwargs, _, settings, _ = client.calls[-1]
+    assert kwargs["env"]["ANTHROPIC_CUSTOM_HEADERS"] == "X-CCFleet-Input: images"
+    assert settings["env"]["ANTHROPIC_CUSTOM_HEADERS"] == "X-CCFleet-Input: images"
+    assert [m["model"] for m in settings["modelPicker"]["options"]] == ["test/vision"]
+    assert "deny" not in settings["permissions"]
+    assert main(["openrouter", "--", "--continue"]) == 0
+    command, kwargs, _, settings, _ = client.calls[-1]
+    assert kwargs["env"]["ANTHROPIC_CUSTOM_HEADERS"] == settings["env"]["ANTHROPIC_CUSTOM_HEADERS"] == ""
+    assert "Read(//**/*.[pP][nN][gG])" in settings["permissions"]["deny"]
+    assert "--append-system-prompt" in command
+    rows[1].pop("input_modalities")
+    assert main(["openrouter-images"]) == 2 and len(client.calls) == 2
+
+
 def test_openrouter_remembered_default_override_and_picker(client, monkeypatch, capsys):
     saved, other, unused = "example/saved", "example/prior", "example/unused"
     monkeypatch.setenv("CCFLEET_OPENROUTER_TOKEN", "ccf_or_" + "b" * 43)
@@ -705,20 +730,20 @@ def test_openrouter_permission_default_and_overrides(client, monkeypatch, tmp_pa
         command, _, _, settings, _ = client.calls[-1]
         return command, settings
     _, settings = launch()
-    assert settings["permissions"] == {"defaultMode": "bypassPermissions"}
+    assert settings["permissions"]["defaultMode"] == "bypassPermissions"
     command, settings = launch("--permission-mode", "auto")
-    assert "permissions" not in settings and command[command.index("--permission-mode") + 1] == "auto"
+    assert "defaultMode" not in settings["permissions"] and command[command.index("--permission-mode") + 1] == "auto"
     command, settings = launch("--", "--permission-mode=plan")
-    assert "permissions" not in settings and "--permission-mode=plan" in command
+    assert "defaultMode" not in settings["permissions"] and "--permission-mode=plan" in command
     for option in ("--continue", "-r", "--resume=some-session", "--restricted", "--safe-mode"):
         _, settings = launch("--", option)
-        assert "permissions" not in settings
+        assert "defaultMode" not in settings["permissions"]
     config = tmp_path / "claude" / "settings.json"
     config.parent.mkdir()
     config.write_text('{"permissions":{"defaultMode":"manual"}}')
     _, settings = launch()
-    assert "permissions" not in settings
+    assert "defaultMode" not in settings["permissions"]
     assert json.loads(config.read_text())["permissions"]["defaultMode"] == "manual"
     config.write_text('{"permissions":{"disableBypassPermissionsMode":"disable"}}')
     _, settings = launch()
-    assert "permissions" not in settings
+    assert "defaultMode" not in settings["permissions"]
