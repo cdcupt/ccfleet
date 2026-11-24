@@ -103,12 +103,13 @@ margin-top:14px}
 .st-machine-table{width:100%;min-width:0;border-collapse:collapse;table-layout:fixed;font-size:14px}
 .st-machine-table th,.st-machine-table td{text-align:left;vertical-align:middle;
 padding:12px 14px;border-bottom:1px solid var(--rule-soft);white-space:normal;
-overflow-wrap:anywhere}
+overflow-wrap:break-word}
 .st-machine-table thead th{font-size:12px;font-weight:640;color:var(--muted);
-background:var(--surface-subtle);border-bottom:1px solid var(--rule)}
+background:var(--surface-subtle);border-bottom:1px solid var(--rule);white-space:nowrap}
 .st-machine-table tbody tr{transition:background-color .14s var(--ease)}
 .st-machine-table tbody tr:hover{background:var(--surface-subtle)}
-.st-machine-table th:first-child{width:38%}.st-machine-table th:nth-child(2){width:26%}
+.st-machine-table th:first-child{width:42%}.st-machine-table th:nth-child(2){width:24%}
+.st-machine-table td:last-child{white-space:nowrap;font-variant-numeric:tabular-nums}
 .st-machine-table tbody th{font-weight:650;text-transform:none;letter-spacing:normal;
 background:none}
 .st-machine-table tbody tr:last-child th,.st-machine-table tbody tr:last-child td{border-bottom:0}
@@ -138,10 +139,10 @@ border-radius:var(--radius-md);padding:16px 18px}.st-health-item h3{font-size:15
 .st-perf-grid{grid-template-columns:minmax(0,1fr);gap:10px}
 .st-perf-metric{padding:14px}
 .st-perf-metric dd{font-size:24px;margin:5px 0}
-.st-machines{padding:18px 16px}.st-machine-table{table-layout:auto}
+.st-machines{padding:18px 16px}.st-machine-table{table-layout:auto;min-width:480px}
 .st-machine-table th:first-child,.st-machine-table th:nth-child(2){width:auto}
-.st-machine-table thead th:first-child,.st-machine-table tbody th>.bi-inline{white-space:nowrap}
-.st-machine-table th,.st-machine-table td{padding:10px 8px}}
+.st-machine-table thead th,.st-machine-table tbody th>.bi-inline{white-space:nowrap}
+.st-machine-table th,.st-machine-table td{padding:10px 10px}}
 """
 
 

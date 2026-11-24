@@ -35,12 +35,15 @@ margin:16px 0 0;font-size:12.5px;color:var(--muted)}
 .wallet-ui .wallet-steps li{padding-left:2px;max-width:100%;overflow-wrap:anywhere}
 .wallet-ui .wallet-ledger-sheet{overflow-x:auto;max-width:100%;min-width:0;
 border:1px solid var(--rule-soft);border-radius:12px;margin-top:14px}
-.wallet-ui .wallet-ledger{width:100%;min-width:360px;border-collapse:collapse;
+.wallet-ui .wallet-ledger{width:100%;min-width:420px;border-collapse:collapse;
 font-size:13px;white-space:normal;table-layout:auto}
 .wallet-ui .wallet-ledger th,.wallet-ui .wallet-ledger td{text-align:left;
 white-space:normal;vertical-align:middle;padding:11px 14px;border-bottom:1px solid var(--rule-soft)}
-.wallet-ui .wallet-ledger th{font-weight:620;color:var(--muted);background:var(--surface-subtle)}
+.wallet-ui .wallet-ledger th{font-weight:620;color:var(--muted);background:var(--surface-subtle);
+white-space:nowrap}
 .wallet-ui .wallet-ledger tr:last-child td{border-bottom:0}
+.wallet-ui .wallet-ledger th:first-child,.wallet-ui .wallet-ledger td:first-child{
+white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--muted)}
 .wallet-ui .wallet-ledger th:last-child,.wallet-ui .wallet-ledger td:last-child{
 text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .wallet-ui .wallet-credit{color:var(--ok);font-weight:620}

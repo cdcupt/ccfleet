@@ -38,6 +38,12 @@ CREATE TABLE IF NOT EXISTS openrouter_requests (
 CREATE INDEX IF NOT EXISTS ix_openrouter_account ON openrouter_requests(account_id,created_at);
 CREATE INDEX IF NOT EXISTS ix_openrouter_used_model ON openrouter_requests(account_id,model)
     WHERE state='settled';
+CREATE TABLE IF NOT EXISTS openrouter_key_requests (
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    request_hash TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (account_id, request_hash)
+);
 """
 
 
@@ -53,10 +59,28 @@ def hold_cents(body_size, max_tokens, rates):
 
 
 class OpenRouterStore:
-    def openrouter_key(self, owner, *, revoke=False):
+    def openrouter_key(self, owner, *, revoke=False, request_id=None):
+        request_hash = None
+        if request_id is not None:
+            if not isinstance(request_id, str) or not 1 <= len(request_id) <= 256:
+                raise BillingError("Invalid OpenRouter key request.")
+            request_hash = hashlib.sha256(request_id.encode("utf-8")).hexdigest()
         token = None if revoke else PREFIX + secrets.token_urlsafe(32)
         digest = hashlib.sha256(token.encode()).hexdigest() if token else None
+        now = time.time()
         with self._write_txn() as db:
+            if request_hash is not None:
+                db.execute(
+                    "DELETE FROM openrouter_key_requests WHERE account_id=? AND created_at<?",
+                    (owner, now - 30 * 86400),
+                )
+                inserted = db.execute(
+                    "INSERT OR IGNORE INTO openrouter_key_requests"
+                    "(account_id, request_hash, created_at) VALUES (?,?,?)",
+                    (owner, request_hash, now),
+                ).rowcount
+                if not inserted:
+                    return None
             self._wallet_account(db, owner)
             db.execute(
                 "INSERT INTO openrouter_accounts(account_id, token_hash) VALUES (?,?) "

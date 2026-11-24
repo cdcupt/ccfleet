@@ -76,6 +76,15 @@ background:var(--acc-soft);color:var(--ink);user-select:all}
 .gm-copy-line{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .gm-copy-line button{min-height:44px}.gm-copy-line [role=status]{color:var(--ok)}
 .gm-next{margin:18px 0 0;color:var(--muted);font-size:14px}
+.site .gm-device-list,.gm-device-list{list-style:none;margin:14px 0 0;padding:0;
+display:grid;gap:8px}
+.gm-device-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;
+gap:8px 14px;padding:10px 14px;border:1px solid var(--rule-soft);border-radius:10px;
+background:var(--surface-subtle)}
+.gm-device-info{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;min-width:0}
+.gm-device-time{font-size:12.5px;color:var(--muted);white-space:nowrap;
+font-variant-numeric:tabular-nums}
+.gm-device-row form{margin:0}
 .gemini-page [hidden]{display:none!important}
 @media(max-width:760px){.gemini-page #subscription{scroll-margin-top:min(16rem,50vh)}
 .gm-grid{grid-template-columns:minmax(0,1fr);gap:16px}
@@ -376,23 +385,40 @@ def reusable_controls(csrf, enrollment_id, ready):
 
 
 def workspace_devices(csrf, slot_id, pairing):
+    from datetime import datetime, timezone
+
     from . import usersite
 
     if not pairing["devices"]:
         return ""
     rows = []
     for device in pairing["devices"]:
-        stamp = escape(resets.iso(device["created_at"]))
+        iso = escape(resets.iso(device["created_at"]))
+        try:
+            shown = datetime.fromtimestamp(
+                float(device["created_at"]), tz=timezone.utc
+            ).strftime("%Y-%m-%d %H:%M UTC")
+        except (ValueError, TypeError, OverflowError, OSError):
+            shown = iso
         remove = usersite._form(f"/account/slots/{slot_id}/cli-revoke", csrf, "Remove",
                                 hidden("device_id", device["id"]), "quiet")
-        rows.append('<li><b>' + escape(device["name"]) + '</b> · ' + tr("Paired", "配对时间")
-                    + f' <time datetime="{stamp}" data-local>{stamp}</time> ' + remove + '</li>')
+        rows.append(
+            '<li class="gm-device-row"><span class="gm-device-info"><b>'
+            + escape(device["name"])
+            + '</b><span class="gm-device-time">'
+            + tr("Paired ", "配对时间 ")
+            + f'<time datetime="{iso}" data-local="datetime" title="{escape(shown)}">'
+            + escape(shown)
+            + "</time></span></span>"
+            + remove
+            + "</li>"
+        )
     warning = ('<p class="gm-secondary">' + tr(
         "When removing a computer that holds a copy of your setup code, replace or disable "
         "the code too. Otherwise that computer can pair again.",
         "若移除的电脑保存了配对码，请同时更换或停用此码，否则该电脑仍可再次配对。") + '</p>'
         if pairing["enrollment_id"] else "")
-    return '<ul>' + ''.join(rows) + '</ul>' + warning
+    return '<ul class="gm-device-list">' + ''.join(rows) + '</ul>' + warning
 
 
 def pairing_help():

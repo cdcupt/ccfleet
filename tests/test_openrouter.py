@@ -124,8 +124,13 @@ def test_slotless_account_create_catalog_rotate_revoke(router):
         == 403
     )
     result = user.call("POST", "/account/openrouter/create", form=form, headers=c.public)
+    assert result.status == 303
     assert result.getheader("Cache-Control") == "no-store"
-    [key] = re.findall(r"ccf_or_[A-Za-z0-9_-]{43}", result.body)
+    assert result.getheader("Location") == "/account/openrouter"
+    assert "ccf_or_" not in (result.getheader("Location") or "")
+    landed = user.call("GET", result.getheader("Location"), headers=c.public)
+    assert landed.status == 200 and landed.getheader("Cache-Control") == "no-store"
+    [key] = re.findall(r"ccf_or_[A-Za-z0-9_-]{43}", landed.body)
     status, _, catalog = api(c, key)
     assert status == 200 and [r["id"] for r in json.loads(catalog)["data"]] == MODELS
     assert key not in user.call("GET", "/account/openrouter", headers=c.public).body
@@ -133,12 +138,13 @@ def test_slotless_account_create_catalog_rotate_revoke(router):
     assert api(c, key)[0] == 401
     assert c.store.openrouter_principal(new) == "alice"
     assert not c.store.resolve_gateway_key(new, now=time.time())
-    user.call(
+    revoked = user.call(
         "POST",
         "/account/openrouter/revoke",
         form={"csrf": usersite.csrf_for(user.session, c.cfg.cookie_secret)},
         headers=c.public,
     )
+    assert revoked.status == 303 and revoked.getheader("Location") == "/account/openrouter"
     assert api(c, new)[0] == 401
 
 
@@ -358,3 +364,90 @@ def test_only_configured_admin_has_no_fleet_charge(router, provider):
         store.openrouter_submit(rid, "admin", admin_key)
     store.openrouter_release(rid)
     assert api(router, admin_key, payload(MODELS[0]))[0] == 402
+
+
+@pytest.mark.parametrize(
+    ("prefix", "expected_location"),
+    [("", "/account/openrouter"), ("/en", "/en/account/openrouter"), ("/zh", "/zh/account/openrouter")],
+)
+def test_openrouter_create_prg_dedup_refresh_and_intentional_rotation(
+    router, prefix, expected_location
+):
+    c = router
+    user = c.browser("alice")
+    other_session = c.browser("alice")
+
+    # 1. Load initial page and extract form (csrf + single-use request_id)
+    initial = user.call("GET", prefix + "/account/openrouter", headers=c.public)
+    assert initial.status == 200 and initial.getheader("Cache-Control") == "no-store"
+    action = (prefix if prefix == "/zh" else "") + "/account/openrouter/create"
+    form = form_from(initial.body, action)
+    assert "csrf" in form and "request_id" in form and len(form["request_id"]) >= 16
+
+    # Missing request_id is refused without rotating
+    bad = user.call(
+        "POST", prefix + "/account/openrouter/create", form={"csrf": form["csrf"]}, headers=c.public
+    )
+    assert bad.status == 400
+
+    # 2. First deliberate submission -> 303 PRG redirect to /account/openrouter (no key in URL)
+    first_post = user.call("POST", prefix + "/account/openrouter/create", form=form, headers=c.public)
+    assert first_post.status == 303
+    assert first_post.getheader("Location") == expected_location
+    assert first_post.getheader("Cache-Control") == "no-store"
+    assert first_post.getheader("Referrer-Policy") == "no-referrer"
+    assert "ccf_or_" not in first_post.body and "ccf_or_" not in (first_post.getheader("Location") or "")
+
+    # 3. Duplicate submission of the exact same form -> 303 redirect, NO rotation, reveal preserved
+    dup_post = user.call("POST", prefix + "/account/openrouter/create", form=form, headers=c.public)
+    assert dup_post.status == 303
+    assert dup_post.getheader("Location") == expected_location
+    assert dup_post.getheader("Cache-Control") == "no-store"
+
+    # A different session for the same user cannot steal the one-time reveal
+    other_view = other_session.call("GET", expected_location, headers=c.public)
+    assert other_view.status == 200 and not re.findall(r"ccf_or_[A-Za-z0-9_-]{43}", other_view.body)
+
+    # 4. Issuing session follows redirect -> sees key ONCE
+    landed = user.call("GET", expected_location, headers=c.public)
+    assert landed.status == 200 and landed.getheader("Cache-Control") == "no-store"
+    [key1] = re.findall(r"ccf_or_[A-Za-z0-9_-]{43}", landed.body)
+    assert api(c, key1)[0] == 200
+
+    # Raw key must never be stored in SQLite
+    dump = "\n".join(c.store._conn.iterdump())
+    assert key1 not in dump
+
+    # 5. Refreshing the landed page hides key1 while leaving key1 valid
+    refreshed = user.call("GET", expected_location, headers=c.public)
+    assert refreshed.status == 200 and refreshed.getheader("Cache-Control") == "no-store"
+    assert key1 not in refreshed.body
+    assert api(c, key1)[0] == 200
+
+    # 6. Replaying the original form after refresh or hitting GET /create leaves key1 valid
+    replay_after = user.call(
+        "POST", prefix + "/account/openrouter/create", form=form, headers=c.public
+    )
+    assert replay_after.status == 303 and replay_after.getheader("Location") == expected_location
+    after_replay = user.call("GET", expected_location, headers=c.public)
+    assert key1 not in after_replay.body and not re.findall(
+        r"ccf_or_[A-Za-z0-9_-]{43}", after_replay.body
+    )
+    get_create = user.call("GET", prefix + "/account/openrouter/create", headers=c.public)
+    assert get_create.status == 303 and get_create.getheader("Location") == expected_location
+    assert api(c, key1)[0] == 200
+
+    # 7. Fresh intentional rotation form rotates the key: key1 -> 401, key2 -> 200
+    rotate_form = form_from(refreshed.body, action)
+    assert rotate_form["request_id"] != form["request_id"]
+    rotated_post = user.call(
+        "POST", prefix + "/account/openrouter/create", form=rotate_form, headers=c.public
+    )
+    assert rotated_post.status == 303 and rotated_post.getheader("Location") == expected_location
+    rotated_page = user.call("GET", expected_location, headers=c.public)
+    [key2] = re.findall(r"ccf_or_[A-Za-z0-9_-]{43}", rotated_page.body)
+    assert key2 != key1
+    assert api(c, key1)[0] == 401
+    assert api(c, key2)[0] == 200
+    assert key2 not in user.call("GET", expected_location, headers=c.public).body
+    assert api(c, key2)[0] == 200

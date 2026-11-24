@@ -228,6 +228,7 @@ class Context:
         self.trial = (None if cfg.broker_only else trial if trial is not None
                       else trial_runtime.build(cfg, store))
         self.gateway = gateway.GatewayRuntime(cfg, store)
+        self.openrouter_reveals = openrouter_account.OneTimeRevealStore()
         self.machine_health = (machine_health.Observer()
                                if cfg.public_machine_metrics_enabled and not cfg.broker_only
                                else None)
@@ -481,6 +482,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                        "/account/usage",
                        "/account/purchase", "/account/renew", "/account/topup",
                        "/account/devin-trial", openrouter.PAGE,
+                       "/account/openrouter/create", "/account/openrouter/revoke",
                 "/account/subscribe", "/account/subscriptions",
                 "/account/subscriptions/portal", "/account/subscriptions/cancel",
                 "/account/subscriptions/resume", "/account/subscriptions/cancel-checkout",
@@ -912,6 +914,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     self._json(403, {"error": "bad or missing csrf token"})
                     return
                 ctx.store.end_session(session_id)
+                ctx.openrouter_reveals.clear_session(session_id)
             # A cookie that no longer names a session is cleared as it is.
             self._redirect_with_cookies(
                 home, [sessions.clearing_header(secure=ctx.cfg.cookie_secure)])
@@ -955,9 +958,36 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 if not self._payment_site() or not service.models:
                     self._json(404, {"error": "OpenRouter unavailable"})
                     return
-                issued = ctx.store.openrouter_key(account["id"], revoke=path.endswith("/revoke"))
-                outcome = openrouter_account.page(
-                    service, ctx.cfg, account, session_id, issued=issued)
+                revoke = path.endswith("/revoke")
+                raw_request_id = form.get("request_id", "")
+                if not revoke and not openrouter_account.REQUEST_ID_RE.fullmatch(raw_request_id):
+                    self._json(400, {"error": "missing or invalid request id"})
+                    return
+                if (revoke and raw_request_id
+                        and not openrouter_account.REQUEST_ID_RE.fullmatch(raw_request_id)):
+                    self._json(400, {"error": "invalid request id"})
+                    return
+                scoped_request_id = (
+                    f"{sessions.hash_session_id(session_id)}:"
+                    f"{'revoke' if revoke else 'create'}:{raw_request_id}"
+                    if raw_request_id
+                    else None
+                )
+                issued = ctx.store.openrouter_key(
+                    account["id"], revoke=revoke, request_id=scoped_request_id
+                )
+                if revoke:
+                    has_key, _ = openrouter_account._account_state(ctx.store, account["id"])
+                    if not has_key:
+                        ctx.openrouter_reveals.clear_account(account["id"])
+                elif issued is not None:
+                    ctx.openrouter_reveals.clear_account(account["id"])
+                    ctx.openrouter_reveals.put(session_id, account["id"], issued)
+                self._redirect(
+                    openrouter.PAGE,
+                    headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+                )
+                return
             elif path == "/account/topup":
                 outcome = stripe_routes.start(ctx.billing, ctx.cfg, account, form, time.time())
             elif path == "/account/subscribe":
@@ -1507,12 +1537,26 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 self._send(200, usersite.usage_page(
                     ctx.store, ctx.cfg, account, session_id, time.time(), note).encode("utf-8"),
                            HTML_HEADERS)
+            elif path in {"/account/openrouter/create", "/account/openrouter/revoke"}:
+                if not self._payment_site() or not ctx.gateway.openrouter.models:
+                    self._json(404, {"error": "not found"})
+                    return
+                self._redirect(
+                    openrouter.PAGE,
+                    headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+                )
             elif path == openrouter.PAGE:
                 if not self._payment_site():
                     self._json(404, {"error": "not found"})
                     return
+                account, session_id = self._signed_in()
+                issued = (
+                    ctx.openrouter_reveals.pop(session_id, account["id"])
+                    if account is not None and session_id
+                    else None
+                )
                 outcome = openrouter_account.page(
-                    ctx.gateway.openrouter, ctx.cfg, *self._signed_in())
+                    ctx.gateway.openrouter, ctx.cfg, account, session_id, issued=issued)
                 self._send(outcome.status, outcome.body.encode(), {**HTML_HEADERS,
                            "Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
             elif path == trial_routes.PAGE:
@@ -1670,9 +1714,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             "remove": "manage",
         }
 
-        def _redirect(self, location: str) -> None:
+        def _redirect(self, location: str,
+                      *, headers: Optional[dict[str, str]] = None) -> None:
             self.send_response(303)
             self.send_header("Location", self._page_location(location))
+            for key, value in (headers or {}).items():
+                self.send_header(key, value)
             self.send_header("Content-Length", "0")
             self.end_headers()
 

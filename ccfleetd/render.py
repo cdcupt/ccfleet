@@ -34,9 +34,13 @@ LOCAL_TIMES_JS = (
     'document.querySelectorAll("time[data-local]").forEach(function(t){'
     'if(t.hasAttribute("data-local-formatted"))return;'
     'var d=new Date(t.dateTime);if(isNaN(d))return;'
+    'var m=t.getAttribute&&t.getAttribute("data-local");'
+    'if(m==="datetime"){if(!t.title)t.title=t.textContent;'
+    't.textContent=d.toLocaleString(undefined,{month:"short",day:"numeric",'
+    'hour:"numeric",minute:"2-digit",timeZoneName:"short"});}else{'
     'var o={hour:"numeric",minute:"2-digit",timeZoneName:"short"};'
     'if(d-Date.now()>864e5)o.weekday="short";'
-    't.textContent=d.toLocaleString(undefined,o)+" ("+t.textContent+")";'
+    't.textContent=d.toLocaleString(undefined,o)+" ("+t.textContent+")";}'
     't.setAttribute("data-local-formatted","");});}'
     'document.addEventListener("ccfleet:quota",update);update();})();')
 LOCAL_TIMES_TAG = f"<script>{LOCAL_TIMES_JS}</script>"

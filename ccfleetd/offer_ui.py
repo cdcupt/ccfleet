@@ -26,8 +26,9 @@ background:var(--panel);box-shadow:var(--shadow)}
 border-bottom:1px solid var(--rule-soft);
 vertical-align:middle;overflow-wrap:anywhere}
 .offer-table thead th{font-size:12px;color:var(--muted);font-weight:640;letter-spacing:0;
-background:var(--surface-subtle);border-bottom:1px solid var(--rule)}
-.offer-table tbody th{text-transform:none;letter-spacing:normal;font-weight:650}
+background:var(--surface-subtle);border-bottom:1px solid var(--rule);white-space:nowrap}
+.offer-table tbody th{text-transform:none;letter-spacing:normal;font-weight:650;
+background:none;color:var(--ink);white-space:nowrap}
 .offer-table tbody tr{transition:background-color .14s var(--ease)}
 .offer-table tbody tr:hover{background:var(--surface-subtle)}
 .offer-tag{display:inline-flex;align-items:center;max-width:100%;padding:3px 10px;
