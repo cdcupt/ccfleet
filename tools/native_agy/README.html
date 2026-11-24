@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>CCFleet native agy verification preview</title>
+<h1>Test native agy through your private slot</h1>
+<p>This opt-in macOS preview exercises the real CCFleet relay and two unmodified Google Antigravity CLI processes. Its model responses are scripted. Both CLIs use disposable profiles and the client creates a temporary Git repository. The check uses no Google model credits.</p>
+<h2>Run the paired test</h2>
+<p>Download the preview ZIP from this prerelease, unpack it, and open Terminal in the extracted <code>ccfleet-native-check</code> folder. Install Google’s <code>agy</code> on the client Mac first. The private Mac slot must have the native-check handler. If this client already has a Gemini workspace pairing for that slot, run the check directly. To pair it first, use your CCFleet Gemini setup code with the bundled launcher.</p>
+<pre>./laptop/ccfleet pair gemini
+./laptop/ccfleet gemini --native-check --project /path/to/your/repo</pre>
+<p>Replace the path with an existing local directory. If you have several slots, specify the intended paired slot with <code>--slot</code>. In agy, trust the disposable folder, allow the marker read if prompted, accept <code>approved.txt</code>, allow <code>git rev-parse --show-toplevel</code>, and reject <code>denied.txt</code>. Expect <code>PASS</code> only after the slot receives the denial. A timed-out or interrupted run ends and can be restarted in a fresh fixture. This preview was exercised with agy 1.5.14.</p>
+<h2>Test both roles locally</h2>
+<pre>python3 ccfleet_agent/gemini_native_check.py loopback .</pre>
+<p>This mode uses a local pipe. Use the paired command above to test ccfleet.io. This preview verifies tool execution and permissions. A successful run does not establish support for consumer-plan headless wrappers. See <a href="https://antigravity.google/docs/faq/">Google’s Antigravity FAQ</a>.</p>
+</html>
