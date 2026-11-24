@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.28"
+CLIENT_VERSION = "0.2.29"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -1641,8 +1641,17 @@ def cmd_gemini(args: argparse.Namespace) -> int:
     acp = getattr(args, "acp", False)
     runner = getattr(args, "test", None)
     test_folder = getattr(args, "test_folder", None)
+    native_check = getattr(args, "native_check", False)
+    native = getattr(args, "native", False)
+    editor = getattr(args, "editor", False)
     access_command = (getattr(args, "full_access", False)
                       or getattr(args, "revoke_full_access", False))
+    # An interactive `ccfleet gemini` now runs the native terminal: the model session lives on
+    # the paired slot, and this Mac keeps the project, the shell and every permission decision.
+    # `--editor` restores the previous default, where this Mac runs the model and the slot only
+    # supplies the workspace tools. A local `--test` runner belongs to that editor session, and
+    # T3 Code's `--acp` path is unchanged.
+    native = native or not (acp or editor or args.preview or native_check or runner)
     if getattr(args, "publish_to", None) is not None and not getattr(args, "full_access", False):
         raise CliError("--publish-to requires --full-access")
     if access_command:
@@ -1662,20 +1671,18 @@ def cmd_gemini(args: argparse.Namespace) -> int:
         raise CliError("open an interactive terminal to use Gemini")
     if sys.platform != "darwin":
         raise CliError("the Gemini local editor currently requires macOS")
-    if getattr(args, "native_check", False) and runner:
+    if native_check and runner:
         raise CliError("--native-check uses a fixed Git command")
-    if getattr(args, "native", False) and runner:
-        raise CliError("--native is an interactive terminal")
     if args.preview and runner:
         raise CliError("--test is available in an interactive Gemini session")
     if not acp:
         project = selected_project(args.project) if args.preview else existing_directory(args.project)
     with gemini_profile() as root:
         if args.pair or not load_config()["devices"]:
-            if getattr(args, "native_check", False) and not args.pair:
+            if native_check and not args.pair:
                 raise CliError("Pair this client with ccfleet pair gemini before running --native-check")
-            if getattr(args, "native", False) and not args.pair:
-                raise CliError("Pair this client with ccfleet pair gemini before using --native")
+            if native and not args.pair:
+                raise CliError("Pair this client with ccfleet pair gemini before using the terminal")
             if acp:
                 raise CliError("this Mac has no Gemini workspace pairing. In a terminal, run "
                                "ccfleet pair gemini, then reconnect T3")
@@ -1684,7 +1691,7 @@ def cmd_gemini(args: argparse.Namespace) -> int:
         _fleet_workspace_device(device)
         transport = ssh_transport_command(device, tty=False, fleet_only=True)
         release_command = [*transport, "ccfleet-gemini-release-v1"]
-        if getattr(args, "native_check", False):
+        if native_check:
             probe = slot_component("gemini_native_check", NATIVE_CHECK_HASH, "native-check",
                                    release_command)
             binary = installed_agent("agy")
@@ -1695,7 +1702,7 @@ def cmd_gemini(args: argparse.Namespace) -> int:
             except (OSError, EOFError, ValueError, subprocess.SubprocessError) as exc:
                 raise CliError(f"Native verification stopped: {exc}") from None
             return 0
-        if getattr(args, "native", False):
+        if native:
             terminal = slot_component("gemini_native_terminal", NATIVE_TERMINAL_HASH,
                                       "native-terminal", release_command)
             binary = installed_agent("agy")
@@ -4183,7 +4190,9 @@ def parser() -> argparse.ArgumentParser:
     gemini_mode.add_argument("--native-check", action="store_true",
                              help="verify two stock agy processes with native local review")
     gemini_mode.add_argument("--native", action="store_true",
-                             help="run stock agy with the model session on your paired slot")
+                             help="run stock agy with the model session on your paired slot (default)")
+    gemini_mode.add_argument("--editor", action="store_true",
+                             help="keep the model on this Mac and use the slot's workspace tools")
     gemini_mode.add_argument("--preview", action="store_true",
                              help="verify a synthetic edit without model billing")
     gemini_mode.add_argument("--full-access", action="store_true",
