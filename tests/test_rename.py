@@ -470,6 +470,7 @@ NEITHER |= {
     ("slot_subscription_cancellations", "order_id"),
     ("slot_subscription_cancellations", "subscription_id"),
     ("slot_subscription_cancellations", "customer_id"),
+    ("openrouter_key_requests", "account_id"),
 }
 
 
