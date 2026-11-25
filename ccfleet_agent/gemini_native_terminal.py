@@ -15,7 +15,7 @@ Protocol (4-byte big-endian length + JSON over the paired SSH transport):
     client -> slot    {"turn": T, "call": C, "result": {...}}
     client -> slot    {"turn": T, "call": C, "error": text}
     client -> slot    {"turn": T, "cancel": C}
-    slot   -> client  {"turn": T, "answer": text} | {"turn": T, "failed": text}
+    slot   -> client  {"turn": T, "answer": text, "model": id?} | {"turn": T, "failed": text}
     slot   -> client  {"fatal": text}
     client -> slot    {"bye": true}
 
@@ -35,6 +35,7 @@ import os
 import queue
 import re
 import secrets
+import shlex
 import shutil
 import signal
 import socket
@@ -65,6 +66,7 @@ REPLAY_LIMIT = 8
 REPLAY_AGE = 300.0
 MAX_REMOTE_TOOLS = 8
 CONVERSATION = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}")
 BENIGN_TOOLS = frozenset(
     {"send_message", "list_resources", "read_resource", "manage_task", "finish"}
 )
@@ -217,6 +219,18 @@ def sse(part: dict) -> tuple:
     return "text/event-stream", ("data: " + json.dumps(reply) + "\n\n").encode()
 
 
+def slot_model_label(model: Any) -> str:
+    if not isinstance(model, str) or not MODEL_ID.fullmatch(model):
+        return "Paired slot · model not reported"
+    if model.startswith("gemini-"):
+        parts = model.split("-")
+        effort = parts.pop() if parts[-1] in ("low", "medium", "high", "xhigh", "max") else None
+        model = " ".join(part.capitalize() for part in parts)
+        if effort:
+            model += " · " + effort
+    return "Last slot reply · " + model
+
+
 @contextlib.contextmanager
 def endpoint(dispatch: Any):
     key = secrets.token_hex(32)
@@ -335,6 +349,7 @@ class Session:
 
     def __init__(self, relay: Any, project: Path, profile: Path, *, pump: bool = True) -> None:
         self.relay = relay
+        self.model_status: Optional[Path] = None
         self.project = project
         self.profile = profile
         self.send_lock = threading.Lock()
@@ -542,6 +557,13 @@ class Session:
             if "failed" in event:
                 raise ValueError(str(event["failed"]) or "the slot turn failed")
             if "answer" in event:
+                if self.model_status is not None:
+                    # Install a complete label before agy renders the corresponding answer.
+                    # A display I/O failure must not discard a successful model turn.
+                    with contextlib.suppress(OSError):
+                        pending = self.model_status.with_suffix(".tmp")
+                        pending.write_text(slot_model_label(event.get("model")) + "\n")
+                        os.replace(pending, self.model_status)
                 response = sse({"text": str(event["answer"])})
                 self._remember(digest, response)
                 return response
@@ -692,7 +714,13 @@ def run(binary: Any, project: Any, command: list, profile: Optional[Path] = None
                 prefix="ccfleet-native-client-", dir="/private/tmp"
             ) as scratch:
                 env = client_environment(profile, Path(scratch), url, key)
-                ui_command = [str(binary)]
+                session.model_status = Path(scratch) / "slot-model.txt"
+                session.model_status.write_text("Paired slot · awaiting first reply\n")
+                footer = {"statusLine": {
+                    "type": "command", "stack_with_default": False,
+                    "command": "/bin/cat " + shlex.quote(str(session.model_status)),
+                }}
+                ui_command = [str(binary), "--settings", json.dumps(footer)]
                 if review:
                     notice = "Local tool approval prompts enabled."
                 else:
@@ -771,13 +799,19 @@ def turn_tool_names(entries: list) -> set:
     return names
 
 
-def turn_answer(entries: list) -> str:
+def turn_reply(entries: list, submitted: int) -> Optional[dict]:
+    # A fresh slot conversation receives one USER_INPUT per submitted user turn.
+    # A delayed or incomplete transcript cannot attest to the current reply.
+    if not submitted or sum(e.get("type") == "USER_INPUT" for e in entries) != submitted:
+        return None
     for entry in reversed(entries):
+        if entry.get("type") == "USER_INPUT":
+            break
         if entry.get("type") == "PLANNER_RESPONSE" and entry.get("status") == "DONE":
             content = entry.get("content")
             if isinstance(content, str) and content.strip():
-                return content.strip()
-    return ""
+                return entry
+    return None
 
 
 def bridge_rules(root: str) -> str:
@@ -855,6 +889,7 @@ class Bridge:
         self.state_lock = threading.Lock()
         self.agy_lock = threading.Lock()
         self.turn: Optional[str] = None
+        self.submitted = 0
         self.call: Optional[str] = None
         self.result: Optional[dict] = None
         self.result_ready = threading.Event()
@@ -978,6 +1013,7 @@ class Bridge:
                 with self.state_lock:
                     require(self.turn is None, "a turn is already running")
                     self.turn = turn
+                    self.submitted += 1
                     self.call = None
                 require(self.authorized(), "workspace grant expired")
                 with self.agy_lock:
@@ -1075,6 +1111,7 @@ class Bridge:
     def _finish(self, result: dict) -> None:
         with self.state_lock:
             turn = self.turn
+            submitted = self.submitted
             self.turn = None
             self.call = None
             self.result = None
@@ -1095,8 +1132,13 @@ class Bridge:
                 self._stop()
                 return
             if result.get("status") == "SUCCESS":
-                answer = turn_answer(entries) or result.get("response")
-                self.send({"turn": turn, "answer": answer if isinstance(answer, str) else ""})
+                reply = turn_reply(entries, submitted)
+                answer = reply["content"].strip() if reply else result.get("response")
+                message = {"turn": turn, "answer": answer if isinstance(answer, str) else ""}
+                model = reply.get("model") if reply else None
+                if isinstance(model, str) and MODEL_ID.fullmatch(model):
+                    message["model"] = model
+                self.send(message)
             else:
                 reason = result.get("error") or result.get("status") or "failed"
                 self.send({"turn": turn, "failed": str(reason)})

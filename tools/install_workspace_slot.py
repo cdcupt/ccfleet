@@ -30,6 +30,7 @@ PREDECESSORS = {
         "f7c7a281de2483d82a80758c88c95247e2bf869497818f4d724faf1f213cf3ab",
     },
     "gemini_native_terminal.py": {
+        "7b24917692569b5dc9fec79d7007c5e83a30fb241fd1fc9d76965ec4dfc33482",
         "87484332e488f48a5453d6f510456825a34e12bc197067ccef3de5e1ebb4c26e",
         "ae78ecd30c6115cbaa6a4229539d214b804cc5b1559ee0c723f856278e71af67",
     },
@@ -38,6 +39,7 @@ PREDECESSORS = {
         "ae78ecd30c6115cbaa6a4229539d214b804cc5b1559ee0c723f856278e71af67",
     },
     "gemini_distribution.py": {
+        "79e02f02b625c8b6f600c44c439b0f44df336856deec846f39c5c71535d0711d",
         "386f272eb3e82c55ec3b9a261d6add6aad11e9bedc285713450ca66d4536888f",
         "e5d70199be537bf5efba1b34cd9f43dd2c6042c909f23f414dc7cf82d046fc27",
         "ba506bc0e1ae0c224a866a90920d8f4b23e99b0874f3a85481dd628005bf70b3",
