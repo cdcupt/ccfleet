@@ -29,7 +29,7 @@ EDITOR_FILES = {
     "native-check": "gemini_native_check.py",
     "native-terminal": "gemini_native_terminal.py",
 }
-EDITOR_VERSION = "0.2.31"
+EDITOR_VERSION = "0.2.33"
 EDITOR_HISTORY = (
     ("0.2.15", "ee147f63c559f4f8deb9e5962501412168edf27e", {
         "editor-client": "0a5afe3d72241511cea9581b3e5bcb2278ead352d0f9f5da375d70f4fb2daad0",
@@ -76,6 +76,9 @@ EDITOR_HISTORY = (
         "project-publish": "9e5d10057dc525da5349c383c0a7e3ddc160d6d76b5139016ab287385a6ea098",
         "native-check": "e5fed949241811152e371158645b99c832c47a57575bb2d6098e2cf213ffb682",
         "native-terminal": "87484332e488f48a5453d6f510456825a34e12bc197067ccef3de5e1ebb4c26e",
+    }),
+    ("0.2.31", "6522f6901a098fcf73d486024571a49a8ce7cc6e", {
+        "native-terminal": "7b24917692569b5dc9fec79d7007c5e83a30fb241fd1fc9d76965ec4dfc33482",
     }),
 )
 

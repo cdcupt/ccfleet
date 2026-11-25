@@ -243,7 +243,8 @@ def test_turn_reading_uses_the_recorded_transcript(tmp_path, monkeypatch):
     transcript = tmp_path / "brain" / "abc" / ".system_generated/logs/transcript_full.jsonl"
     transcript.parent.mkdir(parents=True)
     transcript.write_text(
-        json.dumps({"type": "PLANNER_RESPONSE", "status": "DONE", "content": "from transcript"})
+        json.dumps({"type": "USER_INPUT"}) + "\n"
+        + json.dumps({"type": "PLANNER_RESPONSE", "status": "DONE", "content": "from transcript"})
         + "\n"
         + json.dumps({"tool_calls": [{"name": "mcp_client_read_file", "args": {}}]})
         + "\n"
@@ -253,7 +254,7 @@ def test_turn_reading_uses_the_recorded_transcript(tmp_path, monkeypatch):
     assert terminal.transcript_path("../../etc") is None
     assert terminal.read_transcript(None) == []
     entries = terminal.read_transcript(transcript)
-    assert terminal.turn_answer(entries) == "from transcript"
+    assert terminal.turn_reply(entries, 1)["content"] == "from transcript"
     assert terminal.turn_tool_names(entries) == {"mcp_client_read_file"}
 
 
@@ -539,4 +540,44 @@ def test_native_permissions_apply_to_the_local_agy_process(tmp_path, monkeypatch
     binary.touch()
     transport = ["paired-transport", "ccfleet-gemini-native-v1"]
     terminal.run(binary, tmp_path, transport, tmp_path / "profile", review=review)
-    assert launched == [transport, [str(binary.resolve())] + ([] if review else ["--dangerously-skip-permissions"])]
+    assert launched[0] == transport
+    command = launched[1]
+    assert command[:2] == [str(binary.resolve()), "--settings"]
+    status = json.loads(command[2])["statusLine"]
+    assert status["command"].startswith("/bin/cat ") and not status["stack_with_default"]
+    assert command[3:] == ([] if review else ["--dangerously-skip-permissions"])
+
+
+@pytest.mark.parametrize("current,submitted,expected", [
+    ([], 2, {"answer": "current fallback"}),
+    ([{"type": "USER_INPUT"}], 2, {"answer": "current fallback"}),
+    ([{"type": "USER_INPUT"}, {"type": "PLANNER_RESPONSE", "status": "DONE",
+       "content": "current answer", "model": "gemini-4-neon-high"}], 2,
+     {"answer": "current answer", "model": "gemini-4-neon-high"}),
+    ([{"type": "USER_INPUT"}, {"type": "PLANNER_RESPONSE", "status": "DONE",
+       "content": "current answer", "model": "bad\nmodel"}], 2, {"answer": "current answer"}),
+])
+def test_only_current_transcript_reply_attests_model(monkeypatch, current, submitted, expected):
+    rows = [{"type": "USER_INPUT"}, {"type": "PLANNER_RESPONSE", "status": "DONE",
+            "content": "old answer", "model": "gemini-3.1-pro-low"}, *current]
+    monkeypatch.setattr(terminal, "read_transcript", lambda _: rows)
+    bridge = terminal.Bridge(io.BytesIO(), io.BytesIO(), "/bin/true", lambda: True)
+    bridge.turn = "test"
+    bridge.submitted = submitted
+    bridge._finish({"status": "SUCCESS", "response": "current fallback"})
+    assert frames(bridge.out) == [{"turn": "test", **expected}]
+
+
+def test_status_uses_only_slot_reply_metadata_including_legacy_turns(tmp_path, monkeypatch):
+    session = terminal.Session(relay(), tmp_path, tmp_path, pump=False)
+    session.model_status = tmp_path / "slot-model.txt"
+    monkeypatch.setattr(terminal.secrets, "token_hex", lambda _: "a" * 32)
+    path = "/v1beta/models/gemini-3.1-pro:streamGenerateContent?alt=sse"
+    for i, (fields, label) in enumerate((
+        ({"model": "gemini-4-neon-high"}, "Last slot reply · Gemini 4 Neon · high"),
+        ({}, "Paired slot · model not reported"),
+        ({"model": "unrelated\x1b[2J"}, "Paired slot · model not reported"),
+    )):
+        session.feed({"turn": "a" * 32, "answer": "I am a different model", **fields})
+        session.dispatch(path, body(f"question {i}"))
+        assert session.model_status.read_text().strip() == label
