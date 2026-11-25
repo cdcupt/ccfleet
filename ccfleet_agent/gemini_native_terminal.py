@@ -654,7 +654,8 @@ class Session:
             self.replays.pop(self.replay_order.pop(0), None)
 
 
-def run(binary: Any, project: Any, command: list, profile: Optional[Path] = None) -> int:
+def run(binary: Any, project: Any, command: list, profile: Optional[Path] = None,
+        *, review: bool = True) -> int:
     """Client role: stock interactive agy in the project, model turns on the slot."""
     binary = Path(binary).resolve(strict=True)
     project = Path(project).resolve(strict=True)
@@ -691,12 +692,16 @@ def run(binary: Any, project: Any, command: list, profile: Optional[Path] = None
                 prefix="ccfleet-native-client-", dir="/private/tmp"
             ) as scratch:
                 env = client_environment(profile, Path(scratch), url, key)
-                print(
-                    "CCFleet native terminal: stock Antigravity CLI; model turns run on your "
-                    "paired slot and every operation stays under your local review.",
-                    flush=True,
-                )
-                with child([str(binary)], cwd=str(project), env=env) as ui:
+                ui_command = [str(binary)]
+                if review:
+                    notice = "Local tool approval prompts enabled."
+                else:
+                    ui_command.append("--dangerously-skip-permissions")
+                    notice = ("Full access on this Mac. File edits and shell commands can run "
+                              "without approval prompts. Use ccfleet gemini --review for prompts.")
+                print("CCFleet native terminal: model turns run on your paired slot. " + notice,
+                      flush=True)
+                with child(ui_command, cwd=str(project), env=env) as ui:
                     while ui.poll() is None:
                         if session.closed.is_set():
                             print(

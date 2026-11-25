@@ -1,3 +1,4 @@
+import contextlib
 import hashlib
 import http.client
 import io
@@ -50,7 +51,8 @@ def body(text="hello", response=None):
     return {"contents": contents, "tools": TOOLS}
 
 
-def test_launcher_runs_the_terminal_over_the_existing_gemini_transport(tmp_path, monkeypatch):
+@pytest.mark.parametrize("review", [False, True])
+def test_launcher_runs_the_terminal_over_the_existing_gemini_transport(tmp_path, monkeypatch, review):
     cli = runpy.run_path(str(ROOT / "laptop/ccfleet"))
     scope = cli["cmd_gemini"].__globals__
     assert cli["NATIVE_TERMINAL_HASH"] == hashlib.sha256(
@@ -82,16 +84,17 @@ def test_launcher_runs_the_terminal_over_the_existing_gemini_transport(tmp_path,
 
     def component(name, digest, operation, slot_command):
         loaded.append((name, digest, operation, slot_command))
-        return SimpleNamespace(run=lambda *a: calls.append(a))
+        return SimpleNamespace(run=lambda *a, **kw: calls.append((a, kw)))
 
     monkeypatch.setitem(scope, "slot_component", component)
     monkeypatch.setitem(scope, "installed_agent", lambda name: "/trusted/agy")
     args = SimpleNamespace(
-        project=str(tmp_path), slot="", pair=False, preview=False, native=True
+        project=str(tmp_path), slot="", pair=False, preview=False, native=True, review=review
     )
     assert cli["cmd_gemini"](args) == 0
     assert calls == [
-        ("/trusted/agy", tmp_path, ["paired-transport", "ccfleet-gemini-native-v1"])
+        (("/trusted/agy", tmp_path, ["paired-transport", "ccfleet-gemini-native-v1"]),
+         {"review": review})
     ]
     assert loaded == [
         (
@@ -108,6 +111,7 @@ def test_launcher_runs_the_terminal_over_the_existing_gemini_transport(tmp_path,
     [
         ([], "ccfleet-gemini-native-v1"),
         (["--native"], "ccfleet-gemini-native-v1"),
+        (["--review"], "ccfleet-gemini-native-v1"),
         (["--editor"], "ccfleet-gemini-editor-v1"),
         (["--test", "npm"], "ccfleet-gemini-editor-v1"),
     ],
@@ -507,3 +511,26 @@ def test_manifest_installed_terminal_runs_without_component_download(tmp_path, m
     with pytest.raises(cli["CliError"], match="checksum mismatch"):
         component("gemini_native_terminal", digest, "native-terminal", [])
     assert not cached.exists()
+
+
+@pytest.mark.parametrize("review", [False, True])
+def test_native_permissions_apply_to_the_local_agy_process(tmp_path, monkeypatch, review):
+    launched = []
+    stream = packet({"ready": "ccfleet-native-v1"})
+
+    @contextlib.contextmanager
+    def process(command, **_):
+        launched.append(command)
+        yield SimpleNamespace(stdout=stream, poll=lambda: 0)
+
+    monkeypatch.setattr(terminal.sys, "platform", "darwin")
+    monkeypatch.setattr(terminal, "child", process)
+    monkeypatch.setattr(terminal, "endpoint", lambda _: contextlib.nullcontext(("http://localhost", "fixture")))
+    monkeypatch.setattr(terminal, "Session", lambda *_: SimpleNamespace(dispatch=None, close=lambda: None))
+    scratch = terminal.tempfile.TemporaryDirectory
+    monkeypatch.setattr(terminal.tempfile, "TemporaryDirectory", lambda **_: scratch(dir=tmp_path))
+    binary = tmp_path / "agy"
+    binary.touch()
+    transport = ["paired-transport", "ccfleet-gemini-native-v1"]
+    terminal.run(binary, tmp_path, transport, tmp_path / "profile", review=review)
+    assert launched == [transport, [str(binary.resolve())] + ([] if review else ["--dangerously-skip-permissions"])]

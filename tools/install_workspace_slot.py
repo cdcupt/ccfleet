@@ -29,11 +29,16 @@ PREDECESSORS = {
         "a51e16dc133df2c5eb3fdb069118f8b6145cf716ac5cff94fb31e0704039e462",
         "f7c7a281de2483d82a80758c88c95247e2bf869497818f4d724faf1f213cf3ab",
     },
+    "gemini_native_terminal.py": {
+        "87484332e488f48a5453d6f510456825a34e12bc197067ccef3de5e1ebb4c26e",
+        "ae78ecd30c6115cbaa6a4229539d214b804cc5b1559ee0c723f856278e71af67",
+    },
     "gemini_native_terminal-0.2.28.py": {
         # 0.2.28 shipped before the denial-release fix; the snapshot was rewritten in place.
         "ae78ecd30c6115cbaa6a4229539d214b804cc5b1559ee0c723f856278e71af67",
     },
     "gemini_distribution.py": {
+        "386f272eb3e82c55ec3b9a261d6add6aad11e9bedc285713450ca66d4536888f",
         "e5d70199be537bf5efba1b34cd9f43dd2c6042c909f23f414dc7cf82d046fc27",
         "ba506bc0e1ae0c224a866a90920d8f4b23e99b0874f3a85481dd628005bf70b3",
         "cdc1afafee1816d0e6831a5b196b3c093c166843ca6e6f537e4ddbe755e47cfa",
