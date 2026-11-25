@@ -266,15 +266,16 @@ local file explicitly requested; it is not uploaded and excludes prompt/file
 content, local paths, credentials and account email. Review it before sharing it.
 An existing output file is not overwritten.</p>
 <h3 id="sample-an-intermittent-connection">Sample an intermittent Claude connection</h3>
-<p>On the affected computer, open a terminal in the folder containing the
-<code>ccfleet-diagnose.py</code> support tool. Run this while the symptom is happening.
-Use the slot named in the incident, or omit <code>--slot</code> to check the default route.</p>
-<pre><code>python3 ccfleet-diagnose.py --slot slot-1234 --symptom slow-start</code></pre>
-<p>Replace the example slot with your own. Choose <code>slow-start</code>,
-<code>stream-stalled</code> or <code>disconnect</code> to describe what you saw.
-The tool uses Python 3, curl and the installed CCFleet CLI on macOS or Linux.
-It runs five checks with a five-second pause between them. For intermittent problems,
-use <code>--samples 20 --interval 15</code>. Press Ctrl-C to save the completed observations early.</p>
+<p>On the affected computer, run this while the symptom is happening:</p>
+<pre><code>ccfleet doctor --connection</code></pre>
+<p>For a particular slot, add its name and the symptom. For example:</p>
+<pre><code>ccfleet doctor --connection --slot slot-1234 --symptom slow-start</code></pre>
+<p>Client 0.2.34 adds this command. On an earlier client, run <code>ccfleet update</code> once.
+The default run takes five samples with a five-second pause between them. For intermittent
+problems, add <code>--samples 20 --interval 15</code>. Use <code>--symptom stream-stalled</code>
+or <code>--symptom disconnect</code> when appropriate. Press Ctrl-C to save completed observations.
+Use <code>--export FILE</code> to choose a new report path or <code>--json</code> for JSON on
+standard output.</p>
 <p>The new <code>ccfleet-connection-*.json</code> file appears in the current folder.
 Send it to support with the approximate time of the incident and your slot name.
 It records UTC timestamps, curl connection milestones to the public Fleet health endpoint
