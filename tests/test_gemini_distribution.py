@@ -250,3 +250,30 @@ def test_acp_component_requires_its_own_signed_digest(tmp_path, monkeypatch, ver
                     {"op": "editor-client", "sha256": pin}):
         assert invoke(tmp_path, request) == (2, b"")
     assert invoke(tmp_path, {"op": op, "sha256": pin}, iter([True, False]).__next__) == (2, b"")
+
+
+@pytest.mark.parametrize("accept", [False, True])
+def test_only_explicit_approval_downloads_an_agy_update(tmp_path, monkeypatch, accept):
+    state = tmp_path / "fleet"
+    vendor = tmp_path / "external" / "agy"
+    vendor.parent.mkdir()
+    vendor.write_bytes(b"existing package-manager binary")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(ux, "_google_manifest", lambda *_: {"arch":"arm64","version":"2.0.0","sha512":SUM})
+    monkeypatch.setattr(ux, "_google_version", lambda *_: (1, 0, 0))
+    prompts, actions = [], []
+    monkeypatch.setattr(ux, "_confirm_agent_update", lambda *args: (prompts.append(args), accept)[1])
+    def transfer(command, request, dest, *_):
+        actions.append(request["op"])
+        dest.write_bytes(ARCHIVE)
+    monkeypatch.setattr(ux, "slot_artifact", transfer)
+    def install(archive, digest, target, version, stage, replaced):
+        assert target == state / "runtime/agy" and replaced is None and version == (2,0,0)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(archive.read_bytes())
+    monkeypatch.setattr(ux, "_install_google", install)
+    path = ux.prepare_agent("agy", state, lambda: str(vendor), slot_command=["paired-slot"])
+    assert prompts == [("agy", (1,0,0), "2.0.0")]
+    assert actions == (["archive"] if accept else [])
+    assert path == str(state / "runtime/agy" if accept else vendor)
+    assert vendor.read_bytes() == b"existing package-manager binary"

@@ -26,7 +26,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("CCFLEET_HOME", str(personal / ".config/ccfleet"))
     cli = runpy.run_path(str(ROOT / "laptop/ccfleet"))
     scope = cli["cmd_local"].__globals__
-    monkeypatch.setitem(scope, "prepare_agent", lambda name: scope["find_local_claude"]())
+    monkeypatch.setitem(scope, "prepare_agent", lambda name, **kw: scope["find_local_claude"]())
     device = {"device_id": "device", "slot_id": "slot", "slot_name": "slot-name",
               "key": str(personal / "private.key"), "known_hosts": str(personal / "pin"),
               "host_alias": "slot-host", "user": "slot01"}

@@ -33,6 +33,10 @@ def resolve(config, wanted, transport, **options):
 scope['load_config'] = lambda: {}
 scope['load_gateway'] = lambda: route['gateway']
 scope['local_route'] = resolve
+def prepare(name, *, find, prompt_updates):
+    assert name == "claude" and not prompt_updates
+    return find()
+scope['prepare_agent'] = prepare
 def managed():
     if os.environ.get('TEST_MANAGED_ROUTE'):
         raise scope['CliError']('managed routing conflict')
