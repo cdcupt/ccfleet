@@ -284,4 +284,22 @@ error; inspect the machine and its SSH reachability from BWH.</li>
 
 <p class="lead">Detailed architecture lives in <a href="design.html">design.html</a>; operator
 procedures live in <a href="runbooks.html">runbooks.html</a>.</p>
+<h2 id="personal-mac-registration">Personal Mac registration</h2>
+<p>Signed-in owners open My machines on their account, run the Fleet connector on their own Mac,
+and approve the short-lived code. Each owner can register one personal Mac. The connector uses
+outbound HTTPS and secure WebSockets. The paired CLI and model gateway verify the Mac’s SSH host key.
+The connector serves the signed-in owner’s Claude inference commands through a private SSH configuration.
+macOS Remote Login and router port forwarding are unnecessary. A cold boot with FileVault requires
+local unlock and user login. Python 3 from Apple’s Command Line Tools is required.</p>
+<p><code>CCFLEET_HOME_MAC_OWNERS</code> accepts comma-separated account IDs or <code>*</code> for
+regular enrollment. An empty value disables the enrollment surface. <code>CCFLEET_HOME_MAC_RELEASE_DIR</code>
+points to an immutable directory containing the connector, manifest and detached Fleet signature.
+Build a directory offline with <code>tools/build_home_mac_release.py</code> using the Fleet release key.
+The manifest binds the download to the configured canonical HTTPS origin. Mount the directory read-only
+on the primary. The primary and CLI broker need the same private database volume and service UID for
+the temporary Unix sockets used to carry streams. The reverse proxy must support WebSocket upgrades on
+<code>/api/home-macs/stream/</code>. Keep machine API access logs free of bearer tokens and tickets.</p>
+<p>Removing a Mac in My machines revokes the device, connected clients and active streams.
+To remove the local connector, run the downloaded file with <code>--remove</code>.
+The user’s provider account and projects stay on their Mac.</p>
 </main></body></html>

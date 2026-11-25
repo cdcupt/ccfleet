@@ -29,6 +29,9 @@ from . import (
     gateway_providers,
     gateway_ui,
     gemini_setup,
+    home_mac_routes,
+    home_mac_transport,
+    home_macs,
     machine_health,
     oauth,
     openrouter,
@@ -217,6 +220,7 @@ class Context:
     def __init__(self, store: Store, cfg: Config, monitor: Monitor, *, billing=None,
                  recurring=None, trial=None) -> None:
         self.store = store
+        self.home_mac_streams = home_mac_routes.StreamBudget(cfg.gateway_max_connections)
         self.cfg = cfg
         self.monitor = monitor
         self.billing = (None if cfg.broker_only else
@@ -477,7 +481,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         def _html_page_route(self) -> bool:
             """Current public UI and form results; historical files stay unchanged."""
             path = urllib.parse.urlsplit(getattr(self, "_page_target", self.path)).path
-            current = {"/", "/slots", "/account", gemini_setup.PATH, "/account/available",
+            current = {"/", "/slots", "/account", home_macs.PAGE, gemini_setup.PATH,
+                       "/account/available",
                        "/privacy", "/status",
                        "/account/usage",
                        "/account/purchase", "/account/renew", "/account/topup",
@@ -927,7 +932,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 # page, which offers sign-in, rather than an error.
                 self._redirect("/account")
                 return
-            form = self._form(strict=path in gemini_setup.ACTIONS or path in {
+            form = self._form(strict=path in (home_macs.ACTIONS | gemini_setup.ACTIONS) or path in {
                 "/account/openrouter/create", "/account/openrouter/revoke",
                 "/account/purchase", "/account/renew", "/account/topup",
                 "/account/subscribe", "/account/subscriptions", "/account/subscriptions/portal",
@@ -937,6 +942,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 return
             if not self._csrf_ok(form, session_id):
                 self._json(403, {"error": "bad or missing csrf token"})
+                return
+            if path in home_macs.ACTIONS:
+                home_mac_routes.account_action(self, ctx, account, session_id, path, form)
                 return
             if path in gemini_setup.ACTIONS:
                 if ctx.cfg.broker_only or not ctx.gateway.enabled:
@@ -1338,8 +1346,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 self._json(400, {"error": "invalid WebSocket key"})
                 return
             try:
-                upstream = socket.create_connection(
-                    (device["access_host"], int(device["access_port"])), timeout=10)
+                registration = home_mac_transport.registration(device["access_host"])
+                if registration:
+                    upstream = home_mac_transport.open_stream(ctx.cfg.db_path, registration)
+                else:
+                    upstream = socket.create_connection(
+                        (device["access_host"], int(device["access_port"])), timeout=10)
                 upstream.settimeout(None)
             except OSError:
                 log.warning("CLI broker could not reach node %s", device["node_id"])
@@ -1381,6 +1393,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             path = self._page_route("GET")
             if (path is None or self._legacy_site_redirect()
                     or self._legacy_language_redirect()):
+                return
+            if path.startswith(home_macs.API + "stream/"):
+                home_mac_routes.stream(self, ctx, path.rsplit("/", 1)[1])
+                return
+            if path == home_macs.PAGE or path in home_mac_routes.DOWNLOADS:
+                home_mac_routes.get(self, ctx, path)
                 return
             if path == gemini_setup.PATH:
                 if not self._product_site() or ctx.cfg.broker_only or not ctx.gateway.enabled:
@@ -1726,6 +1744,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:  # noqa: N802
             path = self._page_route("POST")
             if path is None:
+                return
+            if path in home_mac_routes.DEVICE_ACTIONS:
+                home_mac_routes.device(self, ctx, path)
                 return
             if path in {trial_routes.API, trial_routes.API + "/count_tokens"}:
                 if not self._product_site() or ctx.cfg.broker_only:

@@ -1,4 +1,4 @@
-"""Explicit, non-rentable owner inference nodes for one administrator.
+"""Private inference nodes for authorized owners.
 
 Private cost is operator metadata, never an offer or a wallet obligation. The
 owner slot keeps its existing no-provision/no-wipe lifecycle.
@@ -61,14 +61,16 @@ def _enrollment_id(conn, slot_id: str, owner: str) -> Optional[str]:
 
 
 def eligible(conn, node_id: str, account_id: str) -> bool:
-    """Recheck ownership and administrator status at every authorization boundary."""
+    """Recheck slot ownership and the legacy admin or active home registration."""
     return (
         conn.execute(
             "SELECT 1 FROM private_owner_nodes p JOIN nodes n ON n.id=p.node_id "
             "JOIN accounts a ON a.id=p.account_id "
             "JOIN slots s ON s.node_id=p.node_id AND s.id=p.node_id "
             "WHERE p.node_id=? AND p.account_id=? AND p.inference_enabled=1 "
-            "AND a.role='admin' AND n.enabled=1 AND s.kind='owner' AND s.state='active' "
+            "AND (a.role='admin' OR EXISTS (SELECT 1 FROM home_macs h WHERE h.node_id=p.node_id "
+            "AND h.owner_id=p.account_id AND h.removed=0)) AND n.enabled=1 "
+            "AND s.kind='owner' AND s.state='active' "
             "AND s.held_by=p.account_id AND s.gateway_claim_id!=''",
             (node_id, account_id),
         ).fetchone()
@@ -152,11 +154,15 @@ class PrivateOwnerStoreMixin:
     def _private_slot_annotations(self, slots: list[dict[str, Any]]) -> list[dict[str, Any]]:
         with self._lock:
             private = {
-                r["node_id"] for r in self._conn.execute("SELECT node_id FROM private_owner_nodes")
+                r["node_id"]: r["active_home"] for r in self._conn.execute(
+                    "SELECT p.node_id, h.owner_id AS active_home FROM private_owner_nodes p "
+                    "LEFT JOIN home_macs h ON h.node_id=p.node_id AND h.removed=0")
             }
             for slot in slots:
                 if slot["node_id"] in private:
                     slot["private_owner"] = True
+                    if private[slot["node_id"]] and slot.get("held_by") == private[slot["node_id"]]:
+                        slot["home_mac"] = True
                     slot["inference_enabled"] = slot_allowed(
                         self._conn, slot["id"], slot.get("held_by") or ""
                     )
@@ -410,7 +416,9 @@ class PrivateOwnerStoreMixin:
                 "JOIN nodes n ON n.id=p.node_id "
                 "JOIN accounts a ON a.id=p.account_id "
                 "JOIN slots s ON s.node_id=p.node_id AND s.id=p.node_id "
-                "WHERE p.node_id=? AND n.enabled=1 AND p.inference_enabled=1 AND a.role='admin' "
+                "WHERE p.node_id=? AND n.enabled=1 AND p.inference_enabled=1 AND (a.role='admin' "
+                "OR EXISTS(SELECT 1 FROM home_macs h WHERE h.node_id=p.node_id AND h.removed=0 "
+                "AND h.owner_id=p.account_id)) "
                 "AND s.kind='owner' AND s.state='active' AND s.held_by=p.account_id "
                 "AND s.gateway_claim_id!=''",
                 (node_id,),

@@ -21,6 +21,7 @@ build-backend = "setuptools.build_meta"
 packages = ["ccfleetd", "ccfleet_agent"]
 
 [tool.setuptools.data-files]
+"share/ccfleet/home-mac" = ["laptop/ccfleet"]
 "share/ccfleet" = ["README.html"]
 "share/ccfleet/gateway" = ["gateway/README.html"]
 "share/ccfleet/docs" = ["docs/*.html"]

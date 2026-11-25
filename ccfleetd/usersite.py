@@ -380,7 +380,11 @@ def act(store: Store, cfg: Config, account: Mapping[str, Any], path: str,
         return _back("emails-on" if on else "emails-off", "outage-emails")
     if len(parts) == 4 and parts[:2] == ["account", "slots"] and parts[3] in SLOT_ACTIONS:
         slot = store.get_slot(parts[2])
-        if slot is None or (slot.get("private_owner") and account.get("role") != "admin"):
+        if slot and slot.get("home_mac"):
+            if (slot.get("held_by") != account["id"]
+                    or parts[3] not in ("cli", "cli-revoke", "quota")):
+                return not_found(viewer)
+        elif slot is None or (slot.get("private_owner") and account.get("role") != "admin"):
             return not_found(viewer)
         try:
             return _on_slot(store, slot, account["id"], parts[3], form, now, viewer)
@@ -1611,7 +1615,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     from . import trial_routes
 
     held = [slot for slot in store.list_slots(held_by=account["id"])
-            if not slot.get("private_owner") or account.get("role") == "admin"]
+            if not slot.get("private_owner") or slot.get("home_mac")
+            or account.get("role") == "admin"]
     recurring_slots = set()
     if held:
         try:
@@ -1757,7 +1762,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         + '</a></p></div><a class="btn quiet" href="/docs/guide">'
         + label('Setup help', '设置帮助', inline=True) + '</a></div>'
         + _account_nav("/account", monthly=_monthly_management(store, cfg, account),
-                       openrouter=openrouter_on) + banner
+                       openrouter=openrouter_on, home_macs=(account["id"] in cfg.home_mac_owners
+                           or "*" in cfg.home_mac_owners)) + banner
         + trial_routes.entry(cfg)
         + (_wallet_panel(store, account, topup_ready=topup_ready, csrf=csrf, compact=bool(held))
            if wallet_routes.enabled(cfg) else
@@ -1833,10 +1839,13 @@ def _monthly_management(store: Store, cfg: Config, account: Mapping[str, Any]) -
         return False
 
 
-def _account_nav(current: str, *, monthly: bool = False, openrouter: bool = False) -> str:
+def _account_nav(current: str, *, monthly: bool = False, openrouter: bool = False,
+                 home_macs: bool = False) -> str:
     pages = [("/account", "Your slots", "我的槽位"),
              ("/account/usage", "Usage & limits", "用量与额度"),
              ("/account/available", "Available slots", "可用槽位")]
+    if home_macs:
+        pages.insert(1, ("/account/machines", "My machines", "我的设备"))
     if monthly:
         pages.append(("/account/subscriptions", "Monthly payments", "月付管理"))
     if openrouter:
@@ -1885,7 +1894,8 @@ def usage_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     if account is None:
         return _signed_out(cfg)
     held = [slot for slot in store.list_slots(held_by=account['id'])
-            if not slot.get('private_owner') or account.get('role') == 'admin']
+            if not slot.get('private_owner') or slot.get('home_mac')
+            or account.get('role') == 'admin']
     latest = store.latest_heartbeats()
     csrf = csrf_for(session_id, cfg.cookie_secret)
     cards = []
@@ -1946,7 +1956,8 @@ def available_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any
     if account is None:
         return _signed_out(cfg)
     held = [slot for slot in store.list_slots(held_by=account["id"])
-            if not slot.get("private_owner") or account.get("role") == "admin"]
+            if not slot.get("private_owner") or slot.get("home_mac")
+            or account.get("role") == "admin"]
     quota = int(account.get("slot_quota") or 0)
     counted = sum(1 for slot in held if slot["state"] in slotstates.HELD)
     can_claim = wallet_routes.enabled(cfg) or counted < quota
@@ -3171,7 +3182,8 @@ def _slot_card(
         return ('<section class="card slot slot-card private-owner-slot" id="slot-'
                 + escape(slot["id"]) + '"><div class="slot-head"><h2>' + escape(names.display(slot))
                 + ' <span class="tag">'
-                + label("Private administrator Mac", "管理员私有 Mac", inline=True)
+                + (label("Personal Mac", "个人 Mac", inline=True) if slot.get("home_mac") else
+                   label("Private administrator Mac", "管理员私有 Mac", inline=True))
                 + '</span></h2></div><div class="slot-body"><section class="slot-quota-primary">'
                 + _account_quota(slot, report, now, csrf,
                     heard=(heartbeat or {}).get('ts'), max_age=cfg.heartbeat_max_age_s)
