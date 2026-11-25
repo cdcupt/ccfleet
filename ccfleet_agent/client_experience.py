@@ -685,7 +685,7 @@ def _install_google(archive, digest, target, version, stage, replaced):
         staged.unlink(missing_ok=True)
 
 
-def _slot_google(state, find, command, stage):
+def _google_manifest(command, stage):
     arch = {"arm64": "arm64", "x86_64": "amd64"}.get(platform.machine())
     if sys.platform != "darwin" or arch is None or not command:
         raise ExperienceError("Antigravity needs a paired private Mac and a supported local Mac")
@@ -697,14 +697,14 @@ def _slot_google(state, find, command, stage):
             or not VERSION.fullmatch(manifest["version"]) or not isinstance(manifest["sha512"], str)
             or not re.fullmatch(r"[0-9a-f]{128}", manifest["sha512"])):
         raise ExperienceError("the slot supplied invalid release metadata")
+    return manifest
+
+
+def _install_slot_google(state, installed, command, stage, manifest):
     version = tuple(map(int, manifest["version"].split(".")))
+    arch = manifest["arch"]
     managed = state / "runtime" / "agy"
     default = Path.home() / ".local/bin/agy"
-    installed = find()
-    candidates = [p for p in (managed, Path(installed) if installed else None) if p and p.is_file()]
-    for candidate in candidates:
-        if _google_version(candidate, stage) >= version:
-            return str(candidate)
     # Upgrade our ordinary per-user binary; keep package-manager executables and symlinks intact.
     use_default = (not installed or Path(installed) == default) and not default.is_symlink()
     target = default if use_default else managed
@@ -712,7 +712,8 @@ def _slot_google(state, find, command, stage):
     if replaced and (not stat.S_ISREG(replaced.st_mode) or replaced.st_uid != os.getuid()
                      or replaced.st_nlink != 1 or replaced.st_mode & 0o022):
         raise ExperienceError("the existing Antigravity installation cannot be replaced safely")
-    print(f"Installing Google-signed agy {manifest['version']} through your private slot…",
+    action = "Updating" if installed else "Installing"
+    print(f"{action} Google-signed agy {manifest['version']} through your private slot…",
           file=sys.stderr, flush=True)
     archive = stage / "native.tar.gz"
     slot_artifact(command, {"op": "archive", "arch": arch, "sha512": manifest["sha512"]},
@@ -722,7 +723,8 @@ def _slot_google(state, find, command, stage):
 
 
 def _installed_agent_version(binary: str, stage: Path, env: dict[str, str]) -> tuple:
-    result = subprocess.run([binary, "--version"], capture_output=True, cwd=stage, env=env,
+    result = subprocess.run([binary, "--version"], capture_output=True, cwd=stage,
+                            env={**env, "DISABLE_AUTOUPDATER": "1"},
                             stdin=subprocess.DEVNULL, check=True, timeout=15)
     version = re.match(rb"^([0-9]+)\.([0-9]+)\.([0-9]+)(?:\s|$)", result.stdout.strip())
     if not version:
@@ -730,55 +732,94 @@ def _installed_agent_version(binary: str, stage: Path, env: dict[str, str]) -> t
     return tuple(int(x) for x in version.groups())
 
 
+def _local_agent(agent, state, find, stage, env):
+    binary = find()
+    if agent == "claude":
+        return (binary, _installed_agent_version(binary, stage, env)) if binary else (None, ())
+    paths = [state / "runtime" / "agy"]
+    if binary:
+        paths.append(Path(binary))
+    versions = [(str(path), _google_version(path, stage))
+                for path in dict.fromkeys(paths) if path.is_file()]
+    return max(versions, key=lambda pair: pair[1], default=(None, ()))
+
+
+def _confirm_agent_update(agent, current, target):
+    if not (sys.stdin.isatty() and sys.stdout.isatty() and sys.stderr.isatty()):
+        return False
+    installed = ".".join(map(str, current))
+    print(f"{agent} {installed} is installed; {target} is available. Update now? [y/N] ",
+          end="", file=sys.stderr, flush=True)
+    return sys.stdin.readline().strip().lower() in ("y", "yes")
+
+
 def prepare_agent(agent: str, state: Path, find: Callable[[], Optional[str]],
-                  *, slot_command=None) -> str:
-    """Check at every real launch. Never update on help, diagnostics, or pairing."""
+                  *, slot_command=None, prompt_updates=True) -> str:
+    """Install missing local harnesses; updating an existing one requires a terminal opt-in."""
     if agent not in ("claude", "agy"):
         raise ExperienceError("unknown agent")
-    state.mkdir(mode=0o700, parents=True, exist_ok=True)
-    lock = os.open(state / (agent + "-update.lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    if agent == "agy" and (sys.platform != "darwin" or not slot_command):
+        raise ExperienceError("Antigravity needs a paired private Mac and a supported local Mac")
+    env = _maintenance_env()
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        env = _maintenance_env()
         with tempfile.TemporaryDirectory(prefix="ccfleet-agent-") as raw:
             stage = Path(raw)
-            if agent == "agy":
-                return _slot_google(state, find, slot_command, stage)
-            target = _latest_agent(agent, stage, env)
+            binary, current = _local_agent(agent, state, find, stage, env)
+            try:
+                manifest = _google_manifest(slot_command, stage) if agent == "agy" else None
+                target = manifest["version"] if manifest else _latest_agent(agent, stage, env)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                if not binary:
+                    raise
+                print(f"Could not check the latest {agent} release. Starting installed "
+                      + ".".join(map(str, current)) + ".", file=sys.stderr)
+                return binary
             required = tuple(map(int, target.split(".")))
-            binary = find()
-            if binary and _installed_agent_version(binary, stage, env) >= required:
-                return binary
-            if agent == "claude" and env.get("DISABLE_UPDATES") in ("1", "true"):
-                raise ExperienceError("Claude updates are disabled by local policy")
-            print(f"Installing {agent} {target}…" if not binary else
-                  f"Updating {agent} to {target}…", file=sys.stderr, flush=True)
-            if not binary:
-                script = stage / "install.sh"
-                url = "https://claude.ai/install.sh"
-                _vendor_download(url, script, 1024 * 1024, env)
-                subprocess.run(["/bin/bash", "-n", script], env=env, cwd=stage, check=True)
-                command = ["/bin/bash", str(script), "latest"]
-            elif agent == "claude" and Path(binary).resolve().is_relative_to(
-                    Path.home() / ".local/share/claude/versions"):
-                command = [binary, "install", "latest"]
-            else:
-                # The native updater selects the installation's package manager when applicable.
-                command = [binary, "update"]
-            subprocess.run(command, cwd=stage, env=env, stdin=subprocess.DEVNULL,
-                           stdout=sys.stderr, check=True, timeout=240)
-            binary = find()
-            if binary and _installed_agent_version(binary, stage, env) >= required:
-                return binary
-            raise ExperienceError(f"{agent} {target} is unavailable after the vendor update")
+            disabled = agent == "claude" and env.get("DISABLE_UPDATES") in ("1", "true")
+            if binary:
+                if current >= required or disabled or not prompt_updates:
+                    return binary
+                if not _confirm_agent_update(agent, current, target):
+                    return binary
+            elif disabled:
+                raise ExperienceError("Claude installation is disabled by local update policy")
+
+            # Ask outside the lock. Recheck after acquiring it in case another launch installed
+            # the harness while this process checked the release or waited for an answer.
+            state.mkdir(mode=0o700, parents=True, exist_ok=True)
+            fd = os.open(state / (agent + "-update.lock"),
+                         os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "r+b") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                installed, version = _local_agent(agent, state, find, stage, env)
+                if installed and (version >= required or not binary):
+                    return installed
+                if manifest:
+                    return _install_slot_google(state, installed, slot_command, stage, manifest)
+                print(f"Installing Claude Code {target}…" if not installed else
+                      f"Updating Claude Code to {target}…", file=sys.stderr, flush=True)
+                if not installed:
+                    script = stage / "install.sh"
+                    _vendor_download("https://claude.ai/install.sh", script, 1024 * 1024, env)
+                    subprocess.run(["/bin/bash", "-n", script], env=env, cwd=stage, check=True)
+                    command = ["/bin/bash", str(script), "latest"]
+                elif Path(installed).resolve().is_relative_to(
+                        Path.home() / ".local/share/claude/versions"):
+                    command = [installed, "install", "latest"]
+                else:
+                    command = [installed, "update"]
+                subprocess.run(command, cwd=stage, env=env, stdin=subprocess.DEVNULL,
+                               stdout=sys.stderr, check=True, timeout=240)
+                binary, version = _local_agent(agent, state, find, stage, env)
+                if binary and version >= required:
+                    return binary
+                raise ExperienceError(f"Claude Code {target} is unavailable after the update")
     except (OSError, KeyError, json.JSONDecodeError, tarfile.TarError,
             subprocess.SubprocessError) as exc:
         if agent == "agy":
-            raise ExperienceError("unable to verify the release from your slot") from exc
-        raise ExperienceError(f"could not verify or install the latest {agent}: "
-                              "check the vendor connection and installation permissions") from exc
-    finally:
-        os.close(lock)
+            raise ExperienceError("unable to verify or install agy from the paired slot") from exc
+        raise ExperienceError("could not verify or install Claude Code: check the vendor "
+                              "connection and installation permissions") from exc
 
 
 def native_version(binary: str, timeout: float = 5) -> str:

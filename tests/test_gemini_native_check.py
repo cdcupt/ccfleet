@@ -127,7 +127,10 @@ def test_launcher_uses_pinned_component_and_existing_gemini_transport(tmp_path, 
         return SimpleNamespace(run=lambda *a: calls.append(a))
 
     monkeypatch.setitem(scope, "slot_component", component)
-    monkeypatch.setitem(scope, "installed_agent", lambda name: "/trusted/agy")
+    def prepare(name, *, slot_command):
+        assert name == "agy" and slot_command == ["paired-transport", "ccfleet-gemini-release-v1"]
+        return "/trusted/agy"
+    monkeypatch.setitem(scope, "prepare_agent", prepare)
     args = SimpleNamespace(
         project=str(tmp_path), slot="", pair=False, preview=False, native_check=True
     )

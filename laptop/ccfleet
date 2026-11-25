@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.31"
+CLIENT_VERSION = "0.2.32"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -66,7 +66,7 @@ PROJECT_FILES_SHA256 = "0cf5858d4df78fc8c313f5094b3b0e6d1b994f7ed32d0dc4fb7fb4cc
 LIVE_FILES_SHA256 = "95370599f8da87ddb3b666cba7b243104eba1aecf8c1bd3e212b505a2951ea3f"
 LIVE_CLIENT_SHA256 = "aef11ce63810e11fc3c62afc55184f24206998c439abc26b1eed3cde45b0257e"
 INFERENCE_CLIENT_SHA256 = "8ee72d4c67dcb6098c585d472b10409842c9728007694312e7df44fc033c2f2a"
-CLIENT_EXPERIENCE_SHA256 = "b60d83221b712d7c0efb30cab3066d90d0c870ea3f59baaf7006ef7b0fda8175"
+CLIENT_EXPERIENCE_SHA256 = "9e31d962692c4774048164d6f6b69f323d034651da43bb6862a2387a1e909c3b"
 LOCAL_JOBS_SHA256 = "a00588580834ad6e539210b8a8e149dcb26935493403f06a76a43af8945bee81"
 CLIENT_RELEASE_SHA256 = "506918f1aa924701eefd797b3d14fee742735b71123f341413d70dff2fcdcc76"
 SETUP_WAIT_SECONDS = 180
@@ -1699,12 +1699,11 @@ def cmd_gemini(args: argparse.Namespace) -> int:
         _fleet_workspace_device(device)
         transport = ssh_transport_command(device, tty=False, fleet_only=True)
         release_command = [*transport, "ccfleet-gemini-release-v1"]
+        if native or native_check or args.preview:
+            binary = prepare_agent("agy", slot_command=release_command)
         if native_check:
             probe = slot_component("gemini_native_check", NATIVE_CHECK_HASH, "native-check",
                                    release_command)
-            binary = installed_agent("agy")
-            if not binary:
-                raise CliError("Install Google's agy CLI on the client Mac to run --native-check")
             try:
                 probe.run(binary, project, [*transport, "ccfleet-gemini-native-check-v1"])
             except (OSError, EOFError, ValueError, subprocess.SubprocessError) as exc:
@@ -1713,9 +1712,6 @@ def cmd_gemini(args: argparse.Namespace) -> int:
         if native:
             terminal = slot_component("gemini_native_terminal", NATIVE_TERMINAL_HASH,
                                       "native-terminal", release_command)
-            binary = installed_agent("agy")
-            if not binary:
-                raise CliError("Install Google's agy CLI on this Mac to use the native terminal")
             try:
                 terminal.run(binary, project, [*transport, "ccfleet-gemini-native-v1"],
                              review=review)
@@ -1749,11 +1745,9 @@ def cmd_gemini(args: argparse.Namespace) -> int:
               "inside your project. The slot returns synthetic responses. No live model call "
               "or API charge.", flush=True)
         helper = preview_helper(release_command)
-        agent = client_experience().prepare_agent("agy", home(), lambda: installed_agent("agy"),
-                                                  slot_command=release_command)
         command = [*transport, "ccfleet-gemini-preview-v1"]
         try:
-            helper.run(agent, project, command)
+            helper.run(binary, project, command)
         except (EOFError, subprocess.TimeoutExpired) as exc:
             raise CliError("native preview was interrupted before the local edit was verified") from exc
         print("Verified a native local agy edit through your assigned slot. Preview files removed.")
@@ -2806,8 +2800,15 @@ def find_local_claude() -> str:
     return binary
 
 
-def prepare_agent(name: str) -> str:
-    return client_experience().prepare_agent(name, home(), lambda: installed_agent(name))
+def _claude_update_prompt(extra):
+    flags = extra[:extra.index("--")] if "--" in extra else extra
+    return not any(arg.split("=", 1)[0] in {"-p", "--print", "--input-format",
+                                            "--output-format", "--sdk-url"} for arg in flags)
+
+
+def prepare_agent(name: str, *, slot_command=None, find=None, prompt_updates=True) -> str:
+    return client_experience().prepare_agent(name, home(), find or (lambda: installed_agent(name)),
+                                             slot_command=slot_command, prompt_updates=prompt_updates)
 
 
 def inference_command(device: dict[str, Any]) -> list[str]:
@@ -3011,7 +3012,7 @@ def cmd_openrouter(args: argparse.Namespace) -> int:
             print("Recently used: " + ", ".join(recent))
         print("Available (" + price + "): " + ", ".join(models))
         return 0
-    claude = prepare_agent("claude")
+    claude = prepare_agent("claude", prompt_updates=_claude_update_prompt(extra))
     ensure_home()
     env = dict(os.environ)
     env.pop("CCFLEET_OPENROUTER_TOKEN", None)
@@ -3273,7 +3274,8 @@ def cmd_local(args: argparse.Namespace) -> int:
                 setattr(args, name, value)
     if migration_device is not None:
         retire_live_grants(migration_device, yes=args.yes)
-    claude = prepare_agent("claude")
+    claude = prepare_agent("claude", prompt_updates=(not background_job and args.print_prompt is None
+                                                    and _claude_update_prompt(extra)))
     helper = inference_client() if gateway is None else None
     transport = None
 
@@ -3450,7 +3452,15 @@ def _load_launcher(name: str) -> dict[str, Any]:
             or not isinstance(value.get("claude"), str)):
         raise CliError("launcher profile is invalid; create a new named launcher")
     _gateway_url(value["server"])
-    return {**value, "claude": str(_launcher_binary(value["claude"]))}
+    _launcher_candidate(value["claude"])
+    return value
+
+
+def _launcher_candidate(entry: str) -> Optional[str]:
+    # Only the standard user installation can be bootstrapped at a known location.
+    if Path(entry) == Path.home() / ".local/bin/claude" and not os.path.lexists(entry):
+        return None
+    return str(_launcher_binary(entry))
 
 
 def _launcher_client_command() -> list[str]:
@@ -3475,10 +3485,10 @@ def cmd_launcher_create(args: argparse.Namespace) -> int:
     directory = _launcher_directory(args.name, create=True)
     if directory.exists():
         raise CliError("that launcher already exists; choose a different launcher name")
-    selected = args.claude or find_local_claude()
+    selected = args.claude or installed_agent("claude") or Path.home() / ".local/bin/claude"
     try:
         binary = Path(selected).expanduser().absolute()
-        _launcher_binary(str(binary))
+        _launcher_candidate(str(binary))
     except (OSError, RuntimeError):
         raise CliError("choose an installed original Claude executable with --claude") from None
     route = local_route(load_config(), args.slot, "gateway", require_ready=False)
@@ -3621,8 +3631,9 @@ def cmd_external_claude(args: argparse.Namespace) -> int:
         for number in signals:
             signal.signal(number, forward)
         env = dict(os.environ)
-        command = [profile["claude"], *arguments]
-        if not info_only:
+        if info_only:
+            command = [str(_launcher_binary(profile["claude"])), *arguments]
+        else:
             forwarded, settings, bare = _launcher_arguments(arguments)
             check_managed_route()
             saved_gateway = load_gateway()
@@ -3652,7 +3663,9 @@ def cmd_external_claude(args: argparse.Namespace) -> int:
                 os.fchmod(destination.fileno(), 0o600)
                 json.dump(settings, destination)
             split = forwarded.index("--") if "--" in forwarded else len(forwarded)
-            command = [profile["claude"], *forwarded[:split], "--settings", str(settings_path),
+            binary = prepare_agent("claude", find=lambda: _launcher_candidate(profile["claude"]),
+                                   prompt_updates=False)
+            command = [binary, *forwarded[:split], "--settings", str(settings_path),
                        *forwarded[split:]]
         # Do not interrupt Popen between creating and publishing its child.
         # Blocking signals here would leak a blocked mask into the native child.
@@ -3906,7 +3919,6 @@ def _prepare_local_job(args: argparse.Namespace, prompt: str
     if len(json.dumps(spec, allow_nan=False).encode()) > helper.MAX_SPEC_BYTES:
         raise CliError("local job specification is too large")
     check_managed_route()
-    claude = find_local_claude()
     native_env = dict(os.environ)
     if options.legacy_history:
         profile = home() / "local" / hashlib.sha256(device["slot_id"].encode()).hexdigest()[:16]
@@ -3916,7 +3928,7 @@ def _prepare_local_job(args: argparse.Namespace, prompt: str
     native_proxy_exclusions(native_env, project, extra)
     options._background_job = True
     # Construct only: no native process or temporary settings file is created.
-    local_claude_command(claude, options, home() / ".inference-settings-preflight", extra)
+    local_claude_command("claude", options, home() / ".inference-settings-preflight", extra)
     command = [sys.executable, "-I", str(Path(__file__).resolve()), "__job-run"]
     return helper, device, spec, command, timeout, max_jobs
 
@@ -3933,6 +3945,8 @@ def start_local_job(args: argparse.Namespace, prompt: str) -> int:
         check_inference(device)
     # Ask only after inputs pass, while the user's interactive terminal exists.
     # The detached supervisor must not implicitly approve legacy cancellation.
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        prepare_agent("claude")  # The detached worker cannot ask about an optional update.
     retire_live_grants(device, yes=getattr(args, "yes", False))
     result = helper.start(home() / "jobs", spec, command, timeout_s=timeout, max_jobs=max_jobs)
     print(json.dumps(result, sort_keys=True))
@@ -4081,7 +4095,8 @@ def parser() -> argparse.ArgumentParser:
                        help="server used only when pairing a new computer")
     router = sub.add_parser("openrouter", aliases=["openrouter-images"],
                             help="run OpenRouter text-only; use openrouter-images to enable images",
-                            description="ccfleet openrouter starts a text-only session. "
+                            description="Missing Claude Code is installed at launch; updates are optional. "
+                                        "ccfleet openrouter starts a text-only session. "
                                         "ccfleet openrouter-images enables images for one session. "
                                         "Enter a Fleet key once to save it privately on this computer. "
                                         "CCFLEET_OPENROUTER_TOKEN overrides the saved key for this run.")
@@ -4151,6 +4166,8 @@ def parser() -> argparse.ArgumentParser:
     restart.set_defaults(action="restart", no_reconnect=True, reconnect_for=0)
     local = sub.add_parser("claude",
                            help="run original local Claude Code through your assigned slot",
+                           description="Launch Claude Code, installing it if missing. Interactive "
+                                       "sessions ask before updating an existing installation.",
                            epilog="New: ccfleet claude --new --name work | "
                            "Resume picker: ccfleet claude --resume | "
                            "Check setup: ccfleet claude --check")
@@ -4212,7 +4229,9 @@ def parser() -> argparse.ArgumentParser:
     pair_gem.add_argument("--replace", action="store_true",
                           help="pair again, replacing this Mac's saved device for the same slot")
     gemini = sub.add_parser("gemini", help="use Gemini through your private slot in this local project",
-                            epilog="In T3 Code, select the local environment and open Settings > "
+                            description="On a paired Mac, the native terminal installs a missing Google-signed "
+                                      "agy and asks before updating an older version.",
+                               epilog="In T3 Code, select the local environment and open Settings > "
                                    "Providers > Add provider > Show more > Local ACP command. "
                                    "Use ccfleet or its installed absolute path as the executable. "
                                    "Add gemini and --acp as separate arguments. Choose Supervised "

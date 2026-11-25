@@ -87,7 +87,10 @@ def test_launcher_runs_the_terminal_over_the_existing_gemini_transport(tmp_path,
         return SimpleNamespace(run=lambda *a, **kw: calls.append((a, kw)))
 
     monkeypatch.setitem(scope, "slot_component", component)
-    monkeypatch.setitem(scope, "installed_agent", lambda name: "/trusted/agy")
+    def prepare(name, *, slot_command):
+        assert name == "agy" and slot_command == ["paired-transport", "ccfleet-gemini-release-v1"]
+        return "/trusted/agy"
+    monkeypatch.setitem(scope, "prepare_agent", prepare)
     args = SimpleNamespace(
         project=str(tmp_path), slot="", pair=False, preview=False, native=True, review=review
     )
@@ -134,7 +137,10 @@ def test_interactive_gemini_chooses_its_mode(flags, expected, tmp_path, monkeypa
                         lambda: {"devices": {"test": device}, "active": "test"})
     monkeypatch.setitem(scope, "ssh_transport_command",
                         lambda d, *, tty, fleet_only: ["paired-transport"])
-    monkeypatch.setitem(scope, "installed_agent", lambda name: "/trusted/agy")
+    def prepare(name, *, slot_command):
+        assert name == "agy" and slot_command == ["paired-transport", "ccfleet-gemini-release-v1"]
+        return "/trusted/agy"
+    monkeypatch.setitem(scope, "prepare_agent", prepare)
     monkeypatch.setitem(scope, "project_files", lambda: SimpleNamespace(open_root=None))
     monkeypatch.setitem(scope, "project_environment", lambda: {})
     launched = []
