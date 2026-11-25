@@ -265,6 +265,26 @@ repair settings, re-pair or erase history. A support export creates only the new
 local file explicitly requested; it is not uploaded and excludes prompt/file
 content, local paths, credentials and account email. Review it before sharing it.
 An existing output file is not overwritten.</p>
+<h3 id="sample-an-intermittent-connection">Sample an intermittent Claude connection</h3>
+<p>On the affected computer, open a terminal in the folder containing the
+<code>ccfleet-diagnose.py</code> support tool. Run this while the symptom is happening.
+Use the slot named in the incident, or omit <code>--slot</code> to check the default route.</p>
+<pre><code>python3 ccfleet-diagnose.py --slot slot-1234 --symptom slow-start</code></pre>
+<p>Replace the example slot with your own. Choose <code>slow-start</code>,
+<code>stream-stalled</code> or <code>disconnect</code> to describe what you saw.
+The tool uses Python 3, curl and the installed CCFleet CLI on macOS or Linux.
+It runs five checks with a five-second pause between them. For intermittent problems,
+use <code>--samples 20 --interval 15</code>. Press Ctrl-C to save the completed observations early.</p>
+<p>The new <code>ccfleet-connection-*.json</code> file appears in the current folder.
+Send it to support with the approximate time of the incident and your slot name.
+It records UTC timestamps, curl connection milestones to the public Fleet health endpoint
+using your proxy settings, and readiness codes and total check time for your selected
+Claude gateway or paired relay. For an explicitly selected paired relay it also requests
+available aggregate outcomes and first-byte timings from the slot's seven-UTC-day history.
+That history covers the paired slot across its clients. An SSH bridge readiness check
+reaches the slot. A gateway readiness check reads the gateway's route status.
+Model generation and the continuity of a running stream require separate evidence.
+The tool saves the report locally and makes zero model requests.</p>
 <p>The website and status response distinguish <strong>reported ready</strong>, <strong>renewal
 pending</strong>, <strong>sign-in required</strong>, <strong>account maintenance</strong> and unverified/stale
 observations. A heartbeat does not prove provider acceptance. If sign-in is
