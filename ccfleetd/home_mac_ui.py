@@ -3,8 +3,9 @@
 import html
 
 from . import home_mac_motion, home_macs, usersite
-from .bilingual import label
+from .bilingual import bi, label
 
+APPLE_TOOLS_GUIDE = "https://developer.apple.com/documentation/xcode/installing-the-command-line-tools/"
 DOWNLOAD_URL = "/downloads/ccfleet-home-mac.command"
 FALLBACK_COMMAND = "/usr/bin/python3 ~/Downloads/ccfleet-home-mac.command"
 REMOVE_ACTION = "/account/machines/remove"
@@ -466,20 +467,28 @@ def _bi(en: str, zh: str) -> str:
 
 
 def _empty(csrf, *, confirm=False, account_email=""):
+    prerequisite = bi(
+        '<p class="hm-copy"><strong>New Mac?</strong> The connector uses Python 3 from '
+        'Apple’s Command Line Tools. If the tools are missing, install them first. '
+        f'<a href="{APPLE_TOOLS_GUIDE}">Apple’s installer instructions</a></p>',
+        '<p class="hm-copy"><strong>第一次在这台 Mac 上设置？</strong>连接器需要 Apple 命令行工具'
+        '提供的 Python 3。如果尚未安装，请先安装。'
+        f'<a href="{APPLE_TOOLS_GUIDE}">查看 Apple 安装说明</a></p>',
+    )
     instructions = _bi(
-        "Open the signed connector on the Mac mini or MacBook you want to add. "
-        "It connects outbound, even when your IP address changes.",
-        "请在要添加的 Mac mini 或 MacBook 上打开已签名连接器。即使 IP 变化，Mac 也能主动连接。",
+        "Download and open the signed connector on the Mac you want to add. "
+        "A Terminal window may open. Continue in your browser to approve this Mac. "
+        "The Fleet CLI is optional.",
+        "在要添加的 Mac 上下载并打开已签名的连接器。启动时可能会打开“终端”窗口。"
+        "然后回到浏览器批准这台 Mac。Fleet CLI 为可选工具。",
     )
-    fallback = _bi("You can also open it from Terminal.", "也可以在终端中打开。")
-    requirements = _bi(
-        "The connector uses Python 3 from Apple’s Command Line Tools.",
-        "连接器需要 Apple 命令行工具提供的 Python 3。",
-    )
+    fallback = _bi("If double-clicking the download does not open it, run this in Terminal.",
+                   "如果双击下载的连接器无法打开，请在“终端”中运行以下命令。")
     consent = _bi(
-        "Only approve the code on your own Mac. Your Fleet account can then use "
-        "Claude signed in on that Mac.",
-        "仅批准你自己 Mac 上显示的连接码。你的 Fleet 账户随后可使用该 Mac 已登录的 Claude。",
+        "Approve only the code shown on your own Mac. You can register the Mac now. "
+        "To use Claude through this slot, install Claude Code and sign in on that Mac.",
+        "请只批准自己 Mac 上显示的连接码。你可以先注册 Mac；要通过这个槽位使用 Claude，"
+        "请在该 Mac 上安装并登录 Claude Code。",
     )
     hint = _bi("Enter the ten characters shown by the connector.", "输入连接器显示的十位连接码。")
     action = home_macs.ADD_ACTION
@@ -487,12 +496,13 @@ def _empty(csrf, *, confirm=False, account_email=""):
   <li class="hm-step">
     <div class="hm-step-head"><span class="hm-step-num" aria-hidden="true">1</span>
       <h2>{_bi("Open the connector on your Mac", "在 Mac 上打开连接器")}</h2></div>
+    {prerequisite}
     <p class="hm-copy">{instructions}</p>
     <div class="hm-actions"><a class="btn hm-btn-primary" href="{DOWNLOAD_URL}" download>
       {_bi("Download Mac connector", "下载 Mac 连接器")}</a></div>
     <details class="hm-fallback">
       <summary>{_bi("Opening the download", "如何打开下载文件")}</summary>
-      <p class="hm-fallback-label">{fallback} {requirements}</p>
+      <p class="hm-fallback-label">{fallback}</p>
       <code class="hm-cmd">{FALLBACK_COMMAND}</code></details>
   </li>
 """

@@ -87,3 +87,23 @@ def test_canonical_gateway_reference_has_the_same_onboarding_and_pool_controls(l
     assert "ccfleet gateway setup --slots slot-1234 slot-5678 --routing priority" in commands
     assert "ccfleet gateway setup --slots slot-5678 --provider anthropic" in commands
     assert not re.search(r"\b(?:pool-[A-Za-z0-9]+|erik-[12]|PAIRED_SLOT|DEVIN_SLOT)\b", parsed.text)
+
+
+@pytest.mark.parametrize("language, title, optional, consent", [
+    ("en", "Set up a new Mac as a private slot", "The Fleet CLI is optional.",
+     "install Claude Code"),
+    ("zh", "将新 Mac 添加为专属槽位", "Fleet CLI 为可选工具。", "安装并登录 Claude Code"),
+])
+def test_personal_mac_guide_matches_the_download_step(language, title, optional, consent):
+    from ccfleetd import home_mac_ui
+
+    cfg = Config(home_mac_owners=("*",))
+    page = bilingual.project_html(customer_docs.guide(cfg), language, "/docs/guide")
+    assert 'id="personal-mac"' in page and title in page and consent in page
+    assert 'href="#personal-mac"' in page or 'guide#personal-mac"' in page
+    assert home_mac_ui.APPLE_TOOLS_GUIDE in page and optional in page
+    assert '/account/machines/add"' in page and '/account/dedicated"' in page
+    assert 'id="personal-mac"' not in guide(language)
+    step = bilingual.project_html(home_mac_ui._empty("fixture"), language, "/account/machines/add")
+    assert step.index(home_mac_ui.APPLE_TOOLS_GUIDE) < step.index(home_mac_ui.DOWNLOAD_URL)
+    assert optional in step and consent in step
