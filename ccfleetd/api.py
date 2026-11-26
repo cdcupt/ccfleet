@@ -481,7 +481,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         def _html_page_route(self) -> bool:
             """Current public UI and form results; historical files stay unchanged."""
             path = urllib.parse.urlsplit(getattr(self, "_page_target", self.path)).path
-            current = {"/", "/slots", "/account", home_macs.PAGE, gemini_setup.PATH,
+            current = {"/", "/slots", "/account", *home_mac_routes.PAGES, gemini_setup.PATH,
                        "/account/available",
                        "/privacy", "/status",
                        "/account/usage",
@@ -1397,7 +1397,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if path.startswith(home_macs.API + "stream/"):
                 home_mac_routes.stream(self, ctx, path.rsplit("/", 1)[1])
                 return
-            if path == home_macs.PAGE or path in home_mac_routes.DOWNLOADS:
+            if (path in home_mac_routes.PAGES or path in home_mac_routes.DOWNLOADS
+                    or path == home_macs.STATUS):
                 home_mac_routes.get(self, ctx, path)
                 return
             if path == gemini_setup.PATH:

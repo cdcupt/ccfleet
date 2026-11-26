@@ -67,7 +67,7 @@ def _choices(held: list[Mapping[str, Any]], selected: list[str],
     }
     for slot in _selectable(held):
         identifier = str(slot["id"])
-        name = names.display(slot)
+        name = slot.get("home_name") or names.display(slot)
         state = (("Devin ready", "Devin 已就绪")
                  if identifier in native_ready and slot["state"] == slotstates.CLAIMED
                  else states[slot["state"]])
@@ -481,7 +481,7 @@ def selected_slots(store: Any, account_id: str, form: Mapping[str, str]) -> list
 
 
 def act(store: Any, cfg: Any, account: Mapping[str, Any], path: str,
-        form: Mapping[str, str], now: float, session_id: str = "") -> Any:
+        form: Mapping[str, str], now: float, session_id: str = "", *, expected_claim=None) -> Any:
     # Imported at call time so usersite can use the panel without a cycle.
     from . import usersite
     viewer = usersite.viewer_for(account, session_id, cfg, store)
@@ -516,7 +516,8 @@ def act(store: Any, cfg: Any, account: Mapping[str, Any], path: str,
             return usersite._back("gateway-updated", "gateway")
         key = store.create_gateway_key(account["id"], form.get("name", ""), slot_ids,
             mode=form["mode"], now=now, provider=provider, allow_devin=allow_devin,
-            provider_runtime=runtime)
+            provider_runtime=runtime,
+            **({"expected_claim":expected_claim} if expected_claim else {}))
     except (StoreError, ValueError, TypeError):
         return usersite._back("gateway-invalid", "gateway")
     if key.get("provider", gateway_providers.ANTHROPIC) == gateway_providers.DEVIN:

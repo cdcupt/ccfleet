@@ -18,7 +18,8 @@ def state(conn, owner):
     slot = conn.execute(
         "SELECT s.id,s.name,s.unix_user,s.gateway_claim_id AS claim_id,n.access_host,"
         "n.access_port,n.ssh_host_key FROM private_owner_nodes p JOIN nodes n ON n.id=p.node_id "
-        "JOIN slots s ON s.id=p.node_id WHERE p.account_id=?",
+        "JOIN slots s ON s.id=p.node_id WHERE p.account_id=? AND NOT EXISTS "
+        "(SELECT 1 FROM home_macs h WHERE h.node_id=p.node_id)",
         (owner,),
     ).fetchone()
     if not slot or not private_owner.eligible(conn, slot["id"], owner):

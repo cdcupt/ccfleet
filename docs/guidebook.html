@@ -285,8 +285,13 @@ error; inspect the machine and its SSH reachability from BWH.</li>
 <p class="lead">Detailed architecture lives in <a href="design.html">design.html</a>; operator
 procedures live in <a href="runbooks.html">runbooks.html</a>.</p>
 <h2 id="personal-mac-registration">Personal Mac registration</h2>
-<p>Signed-in owners open My machines on their account, run the Fleet connector on their own Mac,
-and approve the short-lived code. Each owner can register one personal Mac. The connector uses
+<p>Signed-in owners choose <strong>Add my Mac</strong> on their account and open the signed connector
+on the Mac they want to add. The connector opens an approval page on that Mac. The owner confirms
+the code and names the slot. Fleet preselects it in <strong>Dedicated slots</strong>, alongside
+the owner's other personal Macs and hosted slots. The connection diagram moves while the controller
+checks the restricted SSH entry through the authenticated tunnel. A verified tunnel and provider
+sign-in are reported separately. Switch slots to see compatible services. OpenRouter and the
+Devin trial, where offered, use their own account-level routes. The connector uses
 outbound HTTPS and secure WebSockets. The paired CLI and model gateway verify the Mac’s SSH host key.
 The connector serves the signed-in owner’s Claude inference commands through a private SSH configuration.
 macOS Remote Login and router port forwarding are unnecessary. A cold boot with FileVault requires

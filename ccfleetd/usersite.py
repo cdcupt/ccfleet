@@ -1640,7 +1640,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                    for s in held}
     csrf = csrf_for(session_id, cfg.cookie_secret)
     quota = int(account.get("slot_quota") or 0)
-    counted = sum(1 for s in held if s["state"] in slotstates.HELD)
+    counted = sum(1 for s in held if s["state"] in slotstates.HELD and not s.get("home_mac"))
 
     tone, words = NOTES.get(note, ("", ""))
     banner = ((
@@ -1649,7 +1649,9 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     )
               if words else "")
     claim = ""
-    if quota == 0:
+    if quota == 0 and any(s.get("home_mac") for s in held):
+        allowance = "<p>Your personal Macs do not use a hosted slot allowance.</p>"
+    elif quota == 0:
         allowance = ("<p><strong>You have no slots yet.</strong></p>"
                      "<p class=\"muted\">Slots are assigned by the operator. Once you have "
                      "an allowance, you can claim one here. "
@@ -1668,7 +1670,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                  + label("Browse available slots", "浏览可用槽位", inline=True) + '</a></div>')
     elif quota > counted:
         claim = _form("/account/claim", csrf, "Claim a slot", cls="primary")
-    allowance = _blocks(allowance, [
+    allowance = _blocks(allowance, ["你的个人 Mac 不占用托管槽位额度。"] if quota == 0
+                        and any(s.get("home_mac") for s in held) else [
         "你还没有槽位。",
         '槽位由运营方分配。获得额度后可在这里领取。<a href="/docs">了解如何购买</a>。',
     ] if quota == 0 else [(
@@ -1727,7 +1730,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                       pairing_slots[0] if pairing_slots else None)
     gemini_links = {s["id"]: gemini_setup_ui.account_link(
         store.antigravity_pairing_status(s["id"], account["id"], now=now))
-        for s in pairing_slots if cfg.gateway_ready and s.get("private_owner")}
+        for s in pairing_slots if cfg.gateway_ready
+        and s.get("private_owner") and not s.get("home_mac")}
     cards = "".join(_slot_card(s, nodes.get(s["node_id"]) or {}, latest.get(s["node_id"]),
                                logins[s["id"]], csrf, cfg, now, flagged[s["id"]],
                                updates[s["id"]], channels, cli_devices[s["id"]],
@@ -1764,6 +1768,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         + _account_nav("/account", monthly=_monthly_management(store, cfg, account),
                        openrouter=openrouter_on, home_macs=(account["id"] in cfg.home_mac_owners
                            or "*" in cfg.home_mac_owners)) + banner
+        + _dedicated_entry(account,cfg,held)
         + trial_routes.entry(cfg)
         + (_wallet_panel(store, account, topup_ready=topup_ready, csrf=csrf, compact=bool(held))
            if wallet_routes.enabled(cfg) else
@@ -1837,6 +1842,16 @@ def _monthly_management(store: Store, cfg: Config, account: Mapping[str, Any]) -
         return bool(store.list_slot_subscriptions(account["id"], limit=1))
     except Exception:
         return False
+
+
+def _dedicated_entry(account,cfg,held):
+    from .dedicated_slots import link
+    actions=[]
+    if account["id"] in cfg.home_mac_owners or "*" in cfg.home_mac_owners:
+        actions.append(link("/account/machines/add","Add my Mac","添加我的 Mac","btn primary"))
+    if held or actions:
+        actions.append(link("/account/dedicated","Choose a dedicated slot","选择专属槽位"))
+    return '<div class="card">'+' '.join(actions)+'</div>' if actions else ""
 
 
 def _account_nav(current: str, *, monthly: bool = False, openrouter: bool = False,
@@ -3180,7 +3195,8 @@ def _slot_card(
                               paid_access=paid_access,
                               provider_ready=slot.get("inference_enabled") is True)
         return ('<section class="card slot slot-card private-owner-slot" id="slot-'
-                + escape(slot["id"]) + '"><div class="slot-head"><h2>' + escape(names.display(slot))
+                + escape(slot["id"]) + '"><div class="slot-head"><h2>'
+                + escape(slot.get("home_name") or names.display(slot))
                 + ' <span class="tag">'
                 + (label("Personal Mac", "个人 Mac", inline=True) if slot.get("home_mac") else
                    label("Private administrator Mac", "管理员私有 Mac", inline=True))
