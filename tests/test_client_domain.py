@@ -241,7 +241,23 @@ def test_native_model_environment_gets_canonical_base_and_same_auth(cli, bare):
 
 
 def test_fresh_defaults_and_version_are_new_without_loading_or_network(cli):
-    assert cli["DEFAULT_SERVER"] == NEW and cli["CLIENT_VERSION"] == "0.2.35"
+    assert cli["DEFAULT_SERVER"] == NEW and cli["CLIENT_VERSION"] == "0.2.36"
     assert cli["parser"]().parse_args(["login"]).server == NEW
     assert cli["parser"]().parse_args(["setup"]).server == NEW
     assert not cli["config_path"]().exists()
+
+
+@pytest.mark.parametrize("args,path", [
+    (["mac", "add"], "/account/machines/add"),
+    (["slots"], "/account/dedicated"),
+])
+def test_account_pages_use_official_origin_without_pairing(cli, monkeypatch, capsys, args, path):
+    monkeypatch.setenv("CCFLEET_SERVER", "https://other.invalid")
+    monkeypatch.setattr(cli["sys"], "platform", "darwin")
+    opened = []
+    monkeypatch.setattr(cli["subprocess"], "call", lambda command: opened.append(command) or 0)
+    url = NEW + path
+    assert cli["main"](args + ["--print-url"]) == 0
+    assert capsys.readouterr().out.strip() == url and not opened
+    assert cli["main"](args) == 0
+    assert opened == [["/usr/bin/open", url]]
