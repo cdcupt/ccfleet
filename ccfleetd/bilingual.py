@@ -11,7 +11,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from . import reference_docs
 
 CURRENT_PAGES = frozenset({
-    '/', '/slots', '/account', '/account/gemini',
+    '/', '/slots', '/account', '/account/machines', '/account/gemini',
     '/account/usage', '/account/available', '/account/purchase',
     '/account/renew',
     '/account/topup', '/account/subscribe', '/account/subscriptions', '/account/devin-trial',
@@ -35,7 +35,8 @@ ADMIN_ACTIONS = {
 }
 SLOT_ACTIONS = frozenset({'release', 'signin', 'switch', 'code', 'cancel', 'cli',
                         'cli-revoke', 'update', 'stable', 'rename', 'quota'})
-POST_PAGES = frozenset({'/account/gemini/start', '/account/gemini/finish',
+POST_PAGES = frozenset({'/account/machines/approve', '/account/machines/remove',
+                        '/account/gemini/start', '/account/gemini/finish',
                        '/account/gemini/disconnect', '/account/gemini/workspace',
                        '/account/openrouter/create', '/account/openrouter/revoke',
                        '/account/devin-trial/create', '/account/devin-trial/revoke',
@@ -54,6 +55,8 @@ TITLES_ZH = {'/': 'CC Fleet', '/docs': 'CC Fleet', '/slots': '槽位与价格', 
              '/account/devin-trial': 'Devin 试用',
              '/account/devin-trial/create': 'Devin 试用',
              '/account/devin-trial/revoke': 'Devin 试用',
+             '/account/machines': '我的设备', '/account/machines/approve': '我的设备',
+             '/account/machines/remove': '我的设备',
              '/account/openrouter': 'OpenRouter 模型与用量',
              '/account/openrouter/create': 'OpenRouter 模型与用量',
              '/account/openrouter/revoke': 'OpenRouter 模型与用量',
@@ -310,6 +313,8 @@ class _Projection(HTMLParser):
                 # replaying the action or carrying one-time credentials.
                 if admin_form(path):
                     switch_target = '/admin'
+                elif path in {'/account/machines/approve', '/account/machines/remove'}:
+                    switch_target = '/account/machines'
                 elif path in {'/account/openrouter/create', '/account/openrouter/revoke'}:
                     switch_target = '/account/openrouter'
                 elif path in {'/account/devin-trial/create', '/account/devin-trial/revoke'}:

@@ -39,6 +39,8 @@ from . import (
     gateway_access,
     gateway_providers,
     gemini_setup_store,
+    home_mac_transport,
+    home_macs,
     names,
     offers,
     openrouter_billing,
@@ -645,7 +647,9 @@ class Store(openrouter_billing.OpenRouterStore,
             if path != ":memory:":
                 self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.executescript(SCHEMA + wallet_topups.SCHEMA + slot_subscriptions.SCHEMA
-                                     + api_model_routes.SCHEMA + openrouter_billing.SCHEMA)
+                                     + api_model_routes.SCHEMA + openrouter_billing.SCHEMA
+                                     + home_macs.SCHEMA + home_mac_transport.SCHEMA)
+            self._add_missing_columns("home_macs", {"tunnel_seen": "REAL"})
             self._add_missing_columns("private_owner_nodes", {
                 "public_usage_enabled": "INTEGER NOT NULL DEFAULT 0",
             })
@@ -1363,6 +1367,7 @@ class Store(openrouter_billing.OpenRouterStore,
                                      ("slot_subscription_orders", "node_id"),
                                      ("slot_subscription_orders", "slot_id"),
                                      ("private_owner_nodes", "node_id"),
+                                     ("home_macs", "node_id"),
                                      ("agy_hosts", "node_id"),
                                      ("agy_enrollments", "slot_id"),
                                      ("usage_ledger_sources", "node_id"),
@@ -2087,6 +2092,7 @@ class Store(openrouter_billing.OpenRouterStore,
         with self._lock:
             row = self._conn.execute(
                 f"SELECT COUNT(*) AS n FROM slots WHERE held_by = ? "  # noqa: S608
+                "AND NOT EXISTS(SELECT 1 FROM home_macs h WHERE h.node_id=slots.node_id) "
                 f"AND state IN ({marks})",
                 (account_id, *sorted(slotstates.HELD))).fetchone()
         return int(row["n"])
@@ -3531,6 +3537,11 @@ class Store(openrouter_billing.OpenRouterStore,
             return not private
         if private and latest["ts"] < (time.time() if now is None else now) - 180:
             return False
+        if private:
+            home = conn.execute("SELECT s.claimed_at FROM home_macs h JOIN slots s "
+                                "ON s.id=h.node_id WHERE h.node_id=?", (node_id,)).fetchone()
+            if home and latest["ts"] < home["claimed_at"]:
+                return False
         try:
             payload = json.loads(latest["payload"])
         except (TypeError, ValueError):
@@ -4163,6 +4174,7 @@ class Store(openrouter_billing.OpenRouterStore,
             marks = ",".join("?" * len(slotstates.HELD))
             held = int(conn.execute(
                 f"SELECT COUNT(*) AS n FROM slots WHERE held_by = ? "  # noqa: S608
+                "AND NOT EXISTS(SELECT 1 FROM home_macs h WHERE h.node_id=slots.node_id) "
                 f"AND state IN ({marks}) AND id != ?",
                 (account_id, *sorted(slotstates.HELD),
                  existing["id"] if existing else "")).fetchone()["n"])
@@ -4271,6 +4283,7 @@ class Store(openrouter_billing.OpenRouterStore,
             quota = int(account["slot_quota"])
             held = int(conn.execute(
                 f"SELECT COUNT(*) AS n FROM slots WHERE held_by = ? "  # noqa: S608
+                "AND NOT EXISTS(SELECT 1 FROM home_macs h WHERE h.node_id=slots.node_id) "
                 f"AND state IN ({marks})",
                 (account_id, *held_states)).fetchone()["n"])
             if held >= quota:

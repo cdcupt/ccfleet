@@ -11,10 +11,12 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 from collections.abc import Iterator
@@ -23,7 +25,7 @@ from typing import Any
 
 from ccfleet_agent import inference_client as wire
 
-from . import api_model_routes, cli_access, gateway_providers
+from . import api_model_routes, cli_access, gateway_providers, home_mac_transport
 
 NATIVE_MESSAGE_PATHS = frozenset({"/v1/messages", "/v1/messages?beta=true"})
 
@@ -118,7 +120,13 @@ class SSHAttempt:
         known = Path(self.directory.name) / "known_hosts"
         known.write_text("ccfleet-gateway-slot " + pin + "\n")
         known.chmod(0o600)
-        return [executable, "-T", "-F", "/dev/null", "-p", str(port),
+        registration = home_mac_transport.registration(host)
+        proxy = []
+        if registration:
+            command = shlex.join([sys.executable, "-m", "ccfleetd.home_mac_proxy",
+                                  str(Path(self.cfg.db_path).resolve()), registration])
+            proxy = ["-o", "ProxyCommand=" + command.replace("%", "%%")]
+        return [executable, *proxy, "-T", "-F", "/dev/null", "-p", str(port),
                 "-o", "HostKeyAlias=ccfleet-gateway-slot",
                 "-o", f"UserKnownHostsFile={known}", "-o", "GlobalKnownHostsFile=/dev/null",
                 "-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no",

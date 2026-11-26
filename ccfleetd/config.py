@@ -127,6 +127,8 @@ class Config:
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     public_url: str = ""
+    home_mac_owners: tuple[str, ...] = ()
+    home_mac_release_dir: str = ""
     # Optional migration origins. Signed clients keep their saved origin; aliases
     # serve the same state without HTTP redirects or credential retargeting.
     public_url_aliases: tuple[str, ...] = ()
@@ -280,6 +282,9 @@ class Config:
             telegram_chat_id=env.get(ENV_PREFIX + "TELEGRAM_CHAT_ID", ""),
             public_url=env.get(ENV_PREFIX + "PUBLIC_URL", "").rstrip("/"),
             public_url_aliases=_public_aliases(env.get(ENV_PREFIX + "PUBLIC_URL_ALIASES", "")),
+            home_mac_release_dir=env.get(ENV_PREFIX + "HOME_MAC_RELEASE_DIR", ""),
+            home_mac_owners=tuple(filter(None, (s.strip() for s in
+                env.get(ENV_PREFIX + "HOME_MAC_OWNERS", "").split(",")))),
             broker_only=_env_bool(env, "BROKER_ONLY", False),
             usd_slot_credit_enabled=_env_bool(env, "USD_SLOT_CREDIT_ENABLED", False),
             stripe_topup_enabled=_env_bool(env, "STRIPE_TOPUP_ENABLED", False),
