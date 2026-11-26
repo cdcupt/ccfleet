@@ -8,7 +8,7 @@ import threading
 import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from html import escape
 from typing import Any, Optional
 
@@ -203,6 +203,8 @@ transition:background-color .15s var(--ease)}
 .or-group-head::-webkit-details-marker{display:none}
 .or-group-head::marker{content:""}
 .or-group-head:hover{background:var(--surface-subtle)}
+.or-group-head-static{cursor:default}
+.or-group-head-static:hover{background:transparent}
 .or-usage-group[open]>.or-group-head{background:var(--surface-subtle);
 border-bottom:1px solid var(--rule-soft)}
 .or-group-main{display:grid;gap:6px;min-width:0;flex:1 1 280px}
@@ -216,6 +218,8 @@ font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
 .or-group-chevron{color:var(--muted);font-size:16px;line-height:1;
 transition:transform .18s var(--ease);flex:none}
 .or-usage-group[open] .or-group-chevron{transform:rotate(90deg);color:var(--acc)}
+.or-group-note{margin:0;padding:10px 14px;font-size:12px;line-height:1.55;color:var(--muted);
+background:var(--surface-subtle);border-bottom:1px solid var(--rule-soft)}
 .or-group-body .or-sheet{border:0;border-radius:0}
 .or-empty{padding:26px 20px;border:1px dashed var(--rule);border-radius:12px;
 background:var(--surface-subtle);text-align:center;display:grid;gap:6px;justify-items:center}
@@ -301,15 +305,56 @@ def _account_state(store: Any, owner: str) -> tuple[Optional[bool], Decimal]:
     return bool(row[0]), carry
 
 
-def _usd(amount: Decimal) -> str:
-    """Format a USD Decimal cleanly with at least 2 decimals while preserving sub-cent precision."""
-    normalized = format(amount.normalize(), "f")
+def _usd_exact(amount: Decimal) -> str:
+    """Format exact Decimal USD without scientific notation and with at least 2 decimals."""
+    sign = "-" if amount < 0 else ""
+    normalized = format(abs(amount).normalize(), "f")
+    if normalized == "0":
+        return "$0.00"
     if "." not in normalized:
-        return f"${normalized}.00"
+        return f"{sign}${int(normalized):,}.00"
     whole, frac = normalized.split(".", 1)
     if len(frac) < 2:
         frac = frac.ljust(2, "0")
-    return f"${whole}.{frac}"
+    return f"{sign}${int(whole):,}.{frac}"
+
+
+def _usd(amount: Decimal, *, max_decimals: Optional[int] = None) -> str:
+    """Format USD cleanly for UI display while keeping sub-cent values readable."""
+    if amount == 0:
+        return "$0.00"
+    sign = "-" if amount < 0 else ""
+    abs_amt = abs(amount)
+    if max_decimals is None:
+        if abs_amt >= Decimal("1"):
+            max_decimals = 2
+        elif abs_amt >= Decimal("0.01"):
+            max_decimals = 4
+        else:
+            max_decimals = 6
+    if max_decimals >= 6 and abs_amt < Decimal("0.000001"):
+        return "<$0.000001" if amount > 0 else ">-$0.000001"
+    quant = Decimal(10) ** -max_decimals
+    rounded = abs_amt.quantize(quant, rounding=ROUND_HALF_UP)
+    if rounded == 0 and abs_amt > 0:
+        return f"<${format(quant, 'f')}" if amount > 0 else f">-${format(quant, 'f')}"
+    text = format(rounded, "f")
+    if "." in text:
+        whole, frac = text.split(".", 1)
+        frac = frac.rstrip("0")
+        if len(frac) < 2:
+            frac = frac.ljust(2, "0")
+        return f"{sign}${int(whole):,}.{frac}"
+    return f"{sign}${int(text):,}.00"
+
+
+def _usd_html(amount: Decimal, *, max_decimals: Optional[int] = None) -> str:
+    """Render USD with full exact precision in a title tooltip when rounded."""
+    shown = _usd(amount, max_decimals=max_decimals)
+    exact = _usd_exact(amount)
+    if shown == exact:
+        return escape(shown)
+    return f'<span title="{escape(exact, quote=True)}">{escape(shown)}</span>'
 
 
 def _rate_usd(amount: Decimal) -> str:
@@ -541,7 +586,7 @@ def _receipt_table(receipts: list[dict[str, Any]]) -> str:
                         + "</small></div>"
                     )
         elif row["wallet_exempt"]:
-            cost_fmt = _usd(Decimal(cost))
+            cost_fmt = _usd_html(Decimal(cost))
             badge = (
                 '<span class="pill ok">'
                 + label("Settled", "已结算", inline=True)
@@ -559,6 +604,7 @@ def _receipt_table(receipts: list[dict[str, Any]]) -> str:
             cost_dec = Decimal(cost)
             fee_dec = Decimal(row["fee_usd"])
             total_dec = cost_dec + fee_dec
+            sub_dec = 2 if total_dec >= Decimal("1") else None
             badge = (
                 '<span class="pill ok">'
                 + label("Settled", "已结算", inline=True)
@@ -566,13 +612,13 @@ def _receipt_table(receipts: list[dict[str, Any]]) -> str:
             )
             billing = (
                 '<div class="or-billing-detail"><strong>'
-                + _usd(total_dec)
+                + _usd_html(total_dec)
                 + "</strong><small>"
                 + label("Usage ", "用量费 ", inline=True)
-                + _usd(cost_dec)
+                + _usd_html(cost_dec, max_decimals=sub_dec)
                 + " + "
                 + label("5% fee ", "5% 服务费 ", inline=True)
-                + _usd(fee_dec)
+                + _usd_html(fee_dec, max_decimals=sub_dec)
                 + "</small></div>"
             )
         rows.append(
@@ -602,42 +648,135 @@ def _receipt_table(receipts: list[dict[str, Any]]) -> str:
     )
 
 
-def _receipt_groups(receipts: list[dict[str, Any]]) -> tuple[str, int]:
-    """Group recent per-request receipts by UTC day and model for clean scanning."""
-    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+def _overview_from_receipts(receipts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Fallback overview builder when a minimal store only exposes openrouter_receipts()."""
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    settled_count = 0
+    pending_count = 0
+    released_count = 0
+    upstream_cost_usd = Decimal(0)
+    fee_usd = Decimal(0)
+    wallet_debited_cents = 0
+    pending_hold_cents = 0
     for row in receipts:
-        moment = _utc_moment(row.get("created_at"))
+        state = row["state"]
+        exempt = bool(row["wallet_exempt"])
+        debit_c = int(row.get("debit_cents") or 0)
+        hold_c = int(row.get("hold_cents") or 0)
+        cost_dec = Decimal(row["cost_usd"]) if row.get("cost_usd") is not None else None
+        fee_dec = (
+            Decimal(row["fee_usd"])
+            if cost_dec is not None and not exempt and row.get("fee_usd") is not None
+            else Decimal(0)
+        )
+        if state == "settled":
+            settled_count += 1
+            if not exempt:
+                wallet_debited_cents += debit_c
+        elif state in ("held", "submitted"):
+            pending_count += 1
+            if not exempt:
+                pending_hold_cents += hold_c
+        elif state == "released":
+            released_count += 1
+        if cost_dec is not None:
+            upstream_cost_usd += cost_dec
+            if not exempt:
+                fee_usd += fee_dec
+        created = row.get("created_at")
+        moment = _utc_moment(created)
         day = moment.strftime("%Y-%m-%d") if moment is not None else "—"
-        grouped.setdefault((day, row["model"]), []).append(row)
+        key = (day, row["model"])
+        bucket = grouped.get(key)
+        if bucket is None:
+            bucket = {
+                "day": day,
+                "model": row["model"],
+                "count": 0,
+                "settled_count": 0,
+                "pending_count": 0,
+                "released_count": 0,
+                "exempt_count": 0,
+                "usage_usd": Decimal(0),
+                "paid_usage_usd": Decimal(0),
+                "fee_usd": Decimal(0),
+                "debit_cents": 0,
+                "hold_cents": 0,
+                "first_at": created,
+                "last_at": created,
+                "receipts": [],
+            }
+            grouped[key] = bucket
+        bucket["count"] += 1
+        if state == "settled":
+            bucket["settled_count"] += 1
+            if not exempt:
+                bucket["debit_cents"] += debit_c
+        elif state in ("held", "submitted"):
+            bucket["pending_count"] += 1
+            if not exempt:
+                bucket["hold_cents"] += hold_c
+        elif state == "released":
+            bucket["released_count"] += 1
+        if exempt:
+            bucket["exempt_count"] += 1
+        if cost_dec is not None:
+            bucket["usage_usd"] += cost_dec
+            if not exempt:
+                bucket["paid_usage_usd"] += cost_dec
+                bucket["fee_usd"] += fee_dec
+        if created is not None:
+            if bucket["first_at"] is None or created < bucket["first_at"]:
+                bucket["first_at"] = created
+            if bucket["last_at"] is None or created > bucket["last_at"]:
+                bucket["last_at"] = created
+        bucket["receipts"].append(row)
+    groups = list(grouped.values())
+    return {
+        "summary": {
+            "total_requests": len(receipts),
+            "settled_count": settled_count,
+            "pending_count": pending_count,
+            "released_count": released_count,
+            "upstream_cost_usd": upstream_cost_usd,
+            "fee_usd": fee_usd,
+            "wallet_debited_cents": wallet_debited_cents,
+            "pending_hold_cents": pending_hold_cents,
+        },
+        "groups": groups,
+        "total_groups": len(groups),
+        "recent_receipts": receipts,
+    }
 
+
+def _receipt_groups(
+    groups: list[dict[str, Any]], *, total_requests: int, total_groups: int
+) -> str:
+    """Render daily-by-model rollups with expandable recent individual receipts."""
     blocks = []
-    auto_open_first = len(receipts) <= 5
-    for idx, ((day, model), items) in enumerate(grouped.items()):
-        count = len(items)
-        settled_n = sum(1 for r in items if r["state"] == "settled")
-        pending_n = sum(1 for r in items if r["state"] in ("held", "submitted"))
-        released_n = sum(1 for r in items if r["state"] == "released")
-        usage_usd = sum(
-            (Decimal(r["cost_usd"]) for r in items if r["cost_usd"] is not None),
-            Decimal(0),
-        )
-        fee_usd = sum(
-            (Decimal(r["fee_usd"]) for r in items
-             if r["cost_usd"] is not None and not r["wallet_exempt"]),
-            Decimal(0),
-        )
-        hold_cents = sum(
-            int(r.get("hold_cents") or 0) for r in items
-            if r["state"] in ("held", "submitted") and not r["wallet_exempt"]
-        )
-        all_exempt = all(bool(r["wallet_exempt"]) for r in items)
+    auto_open_first = total_requests <= 5
+    for idx, group in enumerate(groups):
+        day = group["day"]
+        model = group["model"]
+        count = int(group["count"])
+        settled_n = int(group["settled_count"])
+        pending_n = int(group["pending_count"])
+        released_n = int(group["released_count"])
+        exempt_n = int(group["exempt_count"])
+        usage_usd = Decimal(group["usage_usd"])
+        paid_usage_usd = Decimal(group["paid_usage_usd"])
+        fee_usd = Decimal(group["fee_usd"])
+        hold_cents = int(group.get("hold_cents") or 0)
+        all_exempt = exempt_n == count
+        items = group.get("receipts") or []
 
-        moments = [m for m in (_utc_moment(r.get("created_at")) for r in items) if m is not None]
-        if len(moments) == 1:
-            span_html = _utc_time(items[0].get("created_at"))
-        elif len(moments) > 1:
-            first_t = min(moments).strftime("%H:%M")
-            last_t = max(moments).strftime("%H:%M")
+        first_m = _utc_moment(group.get("first_at"))
+        last_m = _utc_moment(group.get("last_at"))
+        if count == 1 and last_m is not None:
+            span_html = _utc_time(group.get("last_at"))
+        elif first_m is not None and last_m is not None:
+            first_t = first_m.strftime("%H:%M")
+            last_t = last_m.strftime("%H:%M")
             span_text = f"{first_t}–{last_t} UTC" if first_t != last_t else f"{last_t} UTC"
             span_html = f"<span>{escape(span_text)}</span>"
         else:
@@ -654,19 +793,19 @@ def _receipt_groups(receipts: list[dict[str, Any]]) -> tuple[str, int]:
             if settled_n:
                 pills.append(
                     '<span class="pill ok">'
-                    + label(f"{settled_n} settled", f"{settled_n} 已结算", inline=True)
+                    + label(f"{settled_n:,} settled", f"{settled_n:,} 已结算", inline=True)
                     + "</span>"
                 )
             if pending_n:
                 pills.append(
                     '<span class="pill warn">'
-                    + label(f"{pending_n} reserved", f"{pending_n} 已预留", inline=True)
+                    + label(f"{pending_n:,} reserved", f"{pending_n:,} 已预留", inline=True)
                     + "</span>"
                 )
             if released_n:
                 pills.append(
                     '<span class="pill disabled">'
-                    + label(f"{released_n} released", f"{released_n} 已解除", inline=True)
+                    + label(f"{released_n:,} released", f"{released_n:,} 已解除", inline=True)
                     + "</span>"
                 )
 
@@ -674,7 +813,7 @@ def _receipt_groups(receipts: list[dict[str, Any]]) -> tuple[str, int]:
             if settled_n:
                 sub_html = (
                     label("Usage ", "用量费 ", inline=True)
-                    + _usd(usage_usd)
+                    + _usd_html(usage_usd)
                     + " · "
                     + label("Admin covered", "管理员覆盖", inline=True)
                 )
@@ -687,13 +826,27 @@ def _receipt_groups(receipts: list[dict[str, Any]]) -> tuple[str, int]:
                 f"<small>{sub_html}</small></div>"
             )
         elif settled_n:
-            sub_html = (
-                label("Usage ", "用量费 ", inline=True)
-                + _usd(usage_usd)
-                + " + "
-                + label("5% fee ", "5% 服务费 ", inline=True)
-                + _usd(fee_usd)
-            )
+            billed_total = paid_usage_usd + fee_usd
+            sub_dec = 2 if billed_total >= Decimal("1") else None
+            if exempt_n == 0:
+                sub_html = (
+                    label("Usage ", "用量费 ", inline=True)
+                    + _usd_html(usage_usd, max_decimals=sub_dec)
+                    + " + "
+                    + label("5% fee ", "5% 服务费 ", inline=True)
+                    + _usd_html(fee_usd, max_decimals=sub_dec)
+                )
+            else:
+                sub_html = (
+                    label("Usage ", "用量费 ", inline=True)
+                    + _usd_html(usage_usd, max_decimals=sub_dec)
+                    + " · "
+                    + label("Billed ", "计费 ", inline=True)
+                    + _usd_html(paid_usage_usd, max_decimals=sub_dec)
+                    + " + "
+                    + label("5% fee ", "5% 服务费 ", inline=True)
+                    + _usd_html(fee_usd, max_decimals=sub_dec)
+                )
             if hold_cents:
                 sub_html += (
                     " · "
@@ -701,7 +854,7 @@ def _receipt_groups(receipts: list[dict[str, Any]]) -> tuple[str, int]:
                     + wallet.display(hold_cents)
                 )
             charge_html = (
-                f'<div class="or-billing-detail"><strong>{_usd(usage_usd + fee_usd)}'
+                f'<div class="or-billing-detail"><strong>{_usd_html(billed_total)}'
                 f"</strong><small>{sub_html}</small></div>"
             )
         elif pending_n:
@@ -722,30 +875,77 @@ def _receipt_groups(receipts: list[dict[str, Any]]) -> tuple[str, int]:
 
         day_label = f"{day} UTC" if day != "—" else "—"
         count_tag = label(
-            f"{count} request" if count == 1 else f"{count} requests",
-            f"{count} 次请求",
+            f"{count:,} request" if count == 1 else f"{count:,} requests",
+            f"{count:,} 次请求",
             inline=True,
         )
-        open_attr = " open" if (auto_open_first and idx == 0) else ""
-        blocks.append(
-            f'<details class="or-usage-group"{open_attr}>'
-            '<summary class="or-group-head">'
+        summary_tag = (
+            ""
+            if items
+            else '<span class="or-tag">'
+            + label("Summary", "汇总", inline=True)
+            + "</span>"
+        )
+        head_inner = (
             '<div class="or-group-main">'
             '<div class="or-group-top">'
             f'<span class="or-group-day">{escape(day_label)}</span>'
             f"<code>{escape(model)}</code>"
             f'<span class="or-tag">{count_tag}</span>'
+            f"{summary_tag}"
             "</div>"
             '<div class="or-group-meta">'
             f"{span_html}{''.join(pills)}"
             "</div></div>"
             '<div class="or-group-right">'
-            f'{charge_html}<span class="or-group-chevron" aria-hidden="true">▸</span>'
-            "</div></summary>"
-            f'<div class="or-group-body">{_receipt_table(items)}</div>'
-            "</details>"
+            f"{charge_html}"
         )
-    return '<div class="or-usage-groups">' + "".join(blocks) + "</div>", len(blocks)
+        if items:
+            open_attr = " open" if (auto_open_first and idx == 0) else ""
+            partial_note = ""
+            if len(items) < count:
+                partial_note = (
+                    '<p class="or-group-note">'
+                    + label(
+                        f"Showing the {len(items):,} most recent requests out of {count:,} "
+                        f"in this group; group totals above include all {count:,}.",
+                        f"以下仅显示本组最近 {len(items):,} 条明细（共 {count:,} 条请求）；"
+                        f"上方汇总已包含全部 {count:,} 条。",
+                        inline=True,
+                    )
+                    + "</p>"
+                )
+            blocks.append(
+                f'<details class="or-usage-group"{open_attr}>'
+                '<summary class="or-group-head">'
+                + head_inner
+                + '<span class="or-group-chevron" aria-hidden="true">▸</span>'
+                "</div></summary>"
+                f'<div class="or-group-body">{partial_note}{_receipt_table(items)}</div>'
+                "</details>"
+            )
+        else:
+            blocks.append(
+                '<div class="or-usage-group">'
+                '<div class="or-group-head or-group-head-static">'
+                + head_inner
+                + "</div></div></div>"
+            )
+
+    more_note = ""
+    if total_groups > len(groups):
+        more_note = (
+            '<p class="or-note">'
+            + label(
+                f"Showing the {len(groups):,} most recent daily model groups out of "
+                f"{total_groups:,}; the totals above include all {total_requests:,} requests.",
+                f"当前展示最近 {len(groups):,} 个按日模型分组（共 {total_groups:,} 组）；"
+                f"上方总计已包含全部 {total_requests:,} 条请求。",
+                inline=True,
+            )
+            + "</p>"
+        )
+    return '<div class="or-usage-groups">' + "".join(blocks) + "</div>" + more_note
 
 
 def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
@@ -764,7 +964,16 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
 
     balance_cents = service.store.wallet_balance(owner)
     balance = wallet.display(balance_cents)
-    receipts = service.store.openrouter_receipts(owner)
+    overview_fn = getattr(service.store, "openrouter_usage_overview", None)
+    if callable(overview_fn):
+        overview = overview_fn(owner)
+    else:
+        overview = _overview_from_receipts(service.store.openrouter_receipts(owner))
+    summary = overview["summary"]
+    groups = overview["groups"]
+    total_groups = int(overview["total_groups"])
+    recent_receipts = overview["recent_receipts"]
+
     recent_models = service.store.openrouter_recent_models(owner, service.models)
     recent_set = set(recent_models)
     ordered_models = list(dict.fromkeys([*recent_models, *service.models]))
@@ -773,19 +982,11 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
     api_base = (getattr(cfg, "public_url", "") or "https://ccfleet.io").rstrip("/") + "/openrouter"
     has_paid_models = any(p > 0 or c > 0 for p, c in service.models.values())
 
-    settled_count = sum(1 for r in receipts if r["state"] == "settled")
-    upstream_total = sum(
-        (Decimal(r["cost_usd"]) for r in receipts if r["cost_usd"] is not None),
-        Decimal(0),
-    )
-    wallet_debited_cents = sum(
-        int(r.get("debit_cents") or 0) for r in receipts
-        if r["state"] == "settled" and not r["wallet_exempt"]
-    )
-    pending_hold_cents = sum(
-        int(r.get("hold_cents") or 0) for r in receipts
-        if r["state"] in ("held", "submitted") and not r["wallet_exempt"]
-    )
+    total_requests = int(summary["total_requests"])
+    settled_count = int(summary["settled_count"])
+    upstream_total = Decimal(summary["upstream_cost_usd"])
+    wallet_debited_cents = int(summary["wallet_debited_cents"])
+    pending_hold_cents = int(summary["pending_hold_cents"])
 
     def _action_form(action: str, en: str, zh: str, btn_cls: str) -> str:
         req_id = secrets.token_urlsafe(18)
@@ -1119,30 +1320,42 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
         + "</section>"
     )
 
-    # Usage receipts card
-    if receipts:
-        if covered:
+    # Usage & receipts card
+    if total_requests:
+        if covered and wallet_debited_cents == 0:
             charged_stat = "$0.00"
             charged_lbl = label("Fleet wallet charge", "Fleet 余额扣费", inline=True)
         else:
             charged_stat = wallet.display(wallet_debited_cents)
             charged_lbl = label("Fleet wallet debited", "Fleet 余额实扣", inline=True)
-        grouped_html, group_count = _receipt_groups(receipts)
-        req_word = "request" if len(receipts) == 1 else "requests"
-        grp_word = "group" if group_count == 1 else "groups"
-        receipts_meta = label(
-            f"{len(receipts)} {req_word} · {group_count} {grp_word} (latest 50)",
-            f"共 {len(receipts)} 条请求 · 已归为 {group_count} 组（最近 50 条）",
-            inline=True,
+        grouped_html = _receipt_groups(
+            groups, total_requests=total_requests, total_groups=total_groups
         )
+        req_word = "request" if total_requests == 1 else "requests"
+        grp_word = "group" if total_groups == 1 else "groups"
+        shown_receipts = len(recent_receipts)
+        if total_requests > shown_receipts:
+            receipts_meta = label(
+                f"{total_requests:,} {req_word} · {total_groups:,} {grp_word} "
+                f"(all-time totals; latest {shown_receipts:,} expandable)",
+                f"共 {total_requests:,} 条请求 · 已归为 {total_groups:,} 组"
+                f"（总计覆盖全部；最近 {shown_receipts:,} 条可展开）",
+                inline=True,
+            )
+        else:
+            receipts_meta = label(
+                f"{total_requests:,} {req_word} · {total_groups:,} {grp_word}",
+                f"共 {total_requests:,} 条请求 · 已归为 {total_groups:,} 组",
+                inline=True,
+            )
         receipts_inner = (
             '<div class="or-stats">'
             '<div class="or-stat"><span class="or-stat-label">'
             + label("Settled requests", "已结算请求", inline=True)
-            + f'</span><strong class="or-stat-value">{settled_count}</strong></div>'
+            + f'</span><strong class="or-stat-value">{settled_count:,}</strong></div>'
             '<div class="or-stat"><span class="or-stat-label">'
             + label("OpenRouter usage", "OpenRouter 用量", inline=True)
-            + f'</span><strong class="or-stat-value">{_usd(upstream_total)}</strong></div>'
+            + f'</span><strong class="or-stat-value">{_usd_html(upstream_total)}</strong></div>'
             '<div class="or-stat"><span class="or-stat-label">'
             + charged_lbl
             + f'</span><strong class="or-stat-value">{charged_stat}</strong></div>'
@@ -1150,7 +1363,7 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
             + grouped_html
         )
     else:
-        receipts_meta = label("Latest 50 requests", "最近 50 条记录", inline=True)
+        receipts_meta = label("All-time account totals", "账户累计用量", inline=True)
         receipts_inner = (
             '<div class="or-empty"><strong>'
             + label("No OpenRouter requests yet", "暂无 OpenRouter 请求记录", inline=True)
@@ -1168,7 +1381,7 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
     receipts_card = (
         '<section class="or-card" id="openrouter-receipts">'
         '<div class="or-card-head"><h2>'
-        + label("Recent usage", "最近用量", inline=True)
+        + label("Usage & receipts", "用量与明细", inline=True)
         + f'</h2><span class="or-note">{receipts_meta}</span></div>'
         + receipts_inner
         + "</section>"
@@ -1242,7 +1455,7 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
         carry_row = (
             "<div><dt>"
             + label("Carried fraction", "结转零头", inline=True)
-            + f"</dt><dd>{_usd(carry)}</dd></div>"
+            + f"</dt><dd>{_usd_html(carry)}</dd></div>"
             if carry > 0
             else ""
         )
