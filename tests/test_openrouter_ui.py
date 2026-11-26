@@ -332,3 +332,138 @@ def test_openrouter_recent_usage_gathers_many_receipts_with_clean_timestamps(rou
     assert 'data-local="datetime"' in page.body
     assert ("共 16 条请求 · 已归为 4 组" if locale == "zh" else "16 requests · 4 groups") in page.body
 
+
+@pytest.mark.parametrize("locale", ["en", "zh"])
+def test_openrouter_usage_shows_all_time_totals_beyond_latest_50(router, locale):
+    c = router
+    prefix = "/" + locale
+    c.ctx.cfg = replace(c.ctx.cfg, openrouter_admin_account_id="admin")
+    c.service.cfg = c.ctx.cfg
+    admin_key = c.store.openrouter_key("admin")
+
+    # Day 1 (older, outside latest 50 individual receipts): 20 settled requests totaling $14.482921966448
+    day1_base = 1_795_400_000.0
+    day1_each = Decimal("0.7241460983224")
+    for idx in range(20):
+        rid = c.store.openrouter_reserve("admin", admin_key, MODELS[0], 0, admin_account_id="admin")
+        with c.store._write_txn() as db:
+            db.execute(
+                "UPDATE openrouter_requests SET created_at=? WHERE id=?",
+                (day1_base + idx * 60, rid),
+            )
+        c.store.openrouter_submit(rid, "admin", admin_key)
+        c.store.openrouter_identify(rid, f"gen-day1-{idx}")
+        c.store.openrouter_settle(rid, f"gen-day1-{idx}", day1_each)
+
+    # Day 2 (newer): 60 settled requests totaling $0.9420494352 + 2 unsettled submitted requests
+    day2_base = day1_base + 86400
+    day2_each = Decimal("0.01570082392")
+    for idx in range(60):
+        rid = c.store.openrouter_reserve("admin", admin_key, MODELS[0], 0, admin_account_id="admin")
+        with c.store._write_txn() as db:
+            db.execute(
+                "UPDATE openrouter_requests SET created_at=? WHERE id=?",
+                (day2_base + idx * 60, rid),
+            )
+        c.store.openrouter_submit(rid, "admin", admin_key)
+        c.store.openrouter_identify(rid, f"gen-day2-{idx}")
+        c.store.openrouter_settle(rid, f"gen-day2-{idx}", day2_each)
+    for idx in range(2):
+        rid = c.store.openrouter_reserve("admin", admin_key, MODELS[0], 0, admin_account_id="admin")
+        with c.store._write_txn() as db:
+            db.execute(
+                "UPDATE openrouter_requests SET created_at=? WHERE id=?",
+                (day2_base + (60 + idx) * 60, rid),
+            )
+        c.store.openrouter_submit(rid, "admin", admin_key)
+
+    # Backward-compatible receipts API stays capped at 50 while overview aggregates all 82 rows
+    assert len(c.store.openrouter_receipts("admin")) == 50
+    overview = c.store.openrouter_usage_overview("admin")
+    assert overview["summary"]["total_requests"] == 82
+    assert overview["summary"]["settled_count"] == 80
+    assert overview["summary"]["pending_count"] == 2
+    assert overview["summary"]["upstream_cost_usd"] == Decimal("15.424971401648")
+    assert len(overview["groups"]) == 2
+    assert overview["groups"][0]["count"] == 62
+    assert len(overview["groups"][0]["receipts"]) == 50
+    assert overview["groups"][1]["count"] == 20
+    assert overview["groups"][1]["receipts"] == []
+
+    page = c.browser("admin").call("GET", prefix + "/account/openrouter", headers=c.public)
+    assert page.status == 200
+    _assert_csp_and_locale(page, locale)
+    # Headline totals reflect all 80 settled requests & full $15.42 spend (not truncated to < $1)
+    assert ">80<" in page.body
+    assert 'title="$15.424971401648">$15.42</span>' in page.body
+    assert 'title="$14.482921966448">$14.48</span>' in page.body
+    assert (
+        "共 82 条请求 · 已归为 2 组（总计覆盖全部；最近 50 条可展开）"
+        if locale == "zh"
+        else "82 requests · 2 groups (all-time totals; latest 50 expandable)"
+    ) in page.body
+    # Day 2 expands (50 of 62 receipts) while Day 1 renders as a static summary group
+    assert page.body.count('<details class="or-usage-group">') == 1
+    assert 'class="or-group-head or-group-head-static"' in page.body
+    assert (
+        "以下仅显示本组最近 50 条明细（共 62 条请求）"
+        if locale == "zh"
+        else "Showing the 50 most recent requests out of 62 in this group"
+    ) in page.body
+    assert ("汇总" if locale == "zh" else "Summary") in page.body
+
+
+def test_openrouter_paid_account_all_time_debits_and_older_hold_beyond_50(router):
+    c = router
+    grant(c, "50")
+    key = c.store.openrouter_key("alice")
+
+    # Request 0: older unsettled hold of $1.25 (will fall outside the latest 50 rows)
+    old_hold_rid = c.store.openrouter_reserve("alice", key, MODELS[0], 125)
+    c.store.openrouter_submit(old_hold_rid, "alice", key)
+    base = 1_795_500_000.0
+    with c.store._write_txn() as db:
+        db.execute("UPDATE openrouter_requests SET created_at=? WHERE id=?", (base, old_hold_rid))
+
+    # Requests 1..60: 60 settled requests of $0.20 each ($0.21 billed each -> $12.60 total debited)
+    for idx in range(1, 61):
+        rid = c.store.openrouter_reserve("alice", key, MODELS[0], 25)
+        with c.store._write_txn() as db:
+            db.execute(
+                "UPDATE openrouter_requests SET created_at=? WHERE id=?",
+                (base + idx * 10, rid),
+            )
+        c.store.openrouter_submit(rid, "alice", key)
+        c.store.openrouter_identify(rid, f"gen-paid-{idx}")
+        c.store.openrouter_settle(rid, f"gen-paid-{idx}", Decimal("0.20"))
+
+    page = c.browser("alice").call("GET", "/en/account/openrouter", headers=c.public)
+    assert page.status == 200
+    _assert_csp_and_locale(page, "en")
+    # All-time settled: 60 requests, $12.00 upstream usage, $12.60 wallet debited
+    assert ">60<" in page.body
+    assert ">$12.00<" in page.body
+    assert ">$12.60<" in page.body
+    # Available balance ($50.00 - $12.60 - $1.25 = $36.15) AND older $1.25 hold warning are shown
+    assert "$36.15" in page.body
+    assert "$1.25 is currently reserved for in-flight OpenRouter requests" in page.body
+
+
+def test_openrouter_usd_formatting_precision():
+    from ccfleetd import openrouter_account
+
+    assert openrouter_account._usd(Decimal("0")) == "$0.00"
+    assert openrouter_account._usd(Decimal("1.00")) == "$1.00"
+    assert openrouter_account._usd(Decimal("15.424971401648")) == "$15.42"
+    assert openrouter_account._usd_exact(Decimal("15.424971401648")) == "$15.424971401648"
+    assert openrouter_account._usd(Decimal("1234.567")) == "$1,234.57"
+    assert openrouter_account._usd(Decimal("0.42")) == "$0.42"
+    assert openrouter_account._usd(Decimal("0.1596774")) == "$0.1597"
+    assert openrouter_account._usd(Decimal("0.000027552")) == "$0.000028"
+    assert openrouter_account._usd(Decimal("0.0000004")) == "<$0.000001"
+    assert openrouter_account._usd_html(Decimal("1.05")) == "$1.05"
+    assert (
+        openrouter_account._usd_html(Decimal("15.424971401648"))
+        == '<span title="$15.424971401648">$15.42</span>'
+    )
+

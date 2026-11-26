@@ -262,3 +262,144 @@ class OpenRouterStore:
                     (owner,),
                 )
             ]
+
+    def openrouter_usage_overview(self, owner, *, recent_limit=50, group_limit=60):
+        """Return exact all-time account totals, daily-by-model rollups, and recent receipts."""
+        recent_cap = max(0, int(recent_limit))
+        group_cap = max(0, int(group_limit))
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id,model,generation_id,state,cost_usd,fee_usd,debit_cents,"
+                "hold_cents,wallet_exempt,created_at,"
+                "strftime('%Y-%m-%d', created_at, 'unixepoch') AS utc_day "
+                "FROM openrouter_requests WHERE account_id=? "
+                "ORDER BY created_at DESC, rowid DESC",
+                (owner,),
+            ).fetchall()
+
+        recent_receipts = []
+        grouped = {}
+        total_requests = 0
+        settled_count = 0
+        pending_count = 0
+        released_count = 0
+        upstream_cost_usd = Decimal(0)
+        fee_usd = Decimal(0)
+        wallet_debited_cents = 0
+        pending_hold_cents = 0
+
+        for row in rows:
+            state = row["state"]
+            exempt = bool(row["wallet_exempt"])
+            debit_c = int(row["debit_cents"] or 0)
+            hold_c = int(row["hold_cents"] or 0)
+            cost_str = row["cost_usd"]
+            fee_str = row["fee_usd"]
+            created = row["created_at"]
+            model = row["model"]
+            day = row["utc_day"] or "—"
+
+            total_requests += 1
+            is_settled = state == "settled"
+            is_pending = state in ("held", "submitted")
+            is_released = state == "released"
+            if is_settled:
+                settled_count += 1
+                if not exempt:
+                    wallet_debited_cents += debit_c
+            elif is_pending:
+                pending_count += 1
+                if not exempt:
+                    pending_hold_cents += hold_c
+            elif is_released:
+                released_count += 1
+
+            cost_dec = Decimal(cost_str) if cost_str is not None else None
+            fee_dec = (
+                Decimal(fee_str)
+                if cost_dec is not None and not exempt and fee_str is not None
+                else Decimal(0)
+            )
+            if cost_dec is not None:
+                upstream_cost_usd += cost_dec
+                if not exempt:
+                    fee_usd += fee_dec
+
+            key = (day, model)
+            bucket = grouped.get(key)
+            if bucket is None:
+                bucket = {
+                    "day": day,
+                    "model": model,
+                    "count": 0,
+                    "settled_count": 0,
+                    "pending_count": 0,
+                    "released_count": 0,
+                    "exempt_count": 0,
+                    "usage_usd": Decimal(0),
+                    "paid_usage_usd": Decimal(0),
+                    "fee_usd": Decimal(0),
+                    "debit_cents": 0,
+                    "hold_cents": 0,
+                    "first_at": created,
+                    "last_at": created,
+                    "receipts": [],
+                }
+                grouped[key] = bucket
+
+            bucket["count"] += 1
+            if is_settled:
+                bucket["settled_count"] += 1
+                if not exempt:
+                    bucket["debit_cents"] += debit_c
+            elif is_pending:
+                bucket["pending_count"] += 1
+                if not exempt:
+                    bucket["hold_cents"] += hold_c
+            elif is_released:
+                bucket["released_count"] += 1
+            if exempt:
+                bucket["exempt_count"] += 1
+            if cost_dec is not None:
+                bucket["usage_usd"] += cost_dec
+                if not exempt:
+                    bucket["paid_usage_usd"] += cost_dec
+                    bucket["fee_usd"] += fee_dec
+            if created is not None:
+                if bucket["first_at"] is None or created < bucket["first_at"]:
+                    bucket["first_at"] = created
+                if bucket["last_at"] is None or created > bucket["last_at"]:
+                    bucket["last_at"] = created
+
+            if len(recent_receipts) < recent_cap:
+                receipt = {
+                    "id": row["id"],
+                    "model": model,
+                    "generation_id": row["generation_id"],
+                    "state": state,
+                    "cost_usd": cost_str,
+                    "fee_usd": fee_str,
+                    "debit_cents": debit_c,
+                    "hold_cents": hold_c,
+                    "wallet_exempt": int(exempt),
+                    "created_at": created,
+                }
+                recent_receipts.append(receipt)
+                bucket["receipts"].append(receipt)
+
+        all_groups = list(grouped.values())
+        return {
+            "summary": {
+                "total_requests": total_requests,
+                "settled_count": settled_count,
+                "pending_count": pending_count,
+                "released_count": released_count,
+                "upstream_cost_usd": upstream_cost_usd,
+                "fee_usd": fee_usd,
+                "wallet_debited_cents": wallet_debited_cents,
+                "pending_hold_cents": pending_hold_cents,
+            },
+            "groups": all_groups[:group_cap],
+            "total_groups": len(all_groups),
+            "recent_receipts": recent_receipts,
+        }
