@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.35"
+CLIENT_VERSION = "0.2.36"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -4082,6 +4082,16 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_account_page(args: argparse.Namespace) -> int:
+    """Open an official Fleet account page without transmitting a local pairing token."""
+    path = "/account/machines/add" if args.command == "mac" else "/account/dedicated"
+    url = DEFAULT_SERVER + path
+    print(url, flush=True)
+    if not args.print_url and sys.platform == "darwin":
+        return subprocess.call(["/usr/bin/open", url])
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     root = FleetArgumentParser(prog="ccfleet",
                                    description="Local Claude Code with your assigned slot; "
@@ -4089,6 +4099,12 @@ def parser() -> argparse.ArgumentParser:
     root.add_argument("-v", "--version", action="version",
                       version="CC Fleet " + CLIENT_VERSION)
     sub = root.add_subparsers(dest="command")
+    mac = sub.add_parser("mac", help="register a personal Mac as a private Fleet slot")
+    mac_action = mac.add_subparsers(dest="mac_action", required=True)
+    add_mac = mac_action.add_parser("add", help="open the signed Mac connector setup page")
+    slots_page = sub.add_parser("slots", help="open your dedicated slots and service picker")
+    for page in (add_mac, slots_page):
+        page.add_argument("--print-url", action="store_true", help="print the page without opening it")
     login = sub.add_parser("login", help="pair this computer with a slot")
     login.add_argument("code", nargs="?", help=argparse.SUPPRESS)
     login.add_argument("--server", default=os.environ.get("CCFLEET_SERVER", DEFAULT_SERVER))
@@ -4408,6 +4424,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             if not MODEL_RE.fullmatch(args.model):
                 raise CliError("model names use 1-64 letters, digits, dots, underscores or hyphens")
             return cmd_attach(args)
+        if args.command in ("mac", "slots"):
+            return cmd_account_page(args)
         if args.command == "login":
             return cmd_login(args)
         if args.command == "setup":
