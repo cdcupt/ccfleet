@@ -290,7 +290,8 @@ def main(args):
                 f"On your Fleet account, approve this Mac using {code[:5]}-{code[5:]}.", flush=True
             )
             print(ORIGIN + "/account/machines", flush=True)
-            subprocess.run(["/usr/bin/open", ORIGIN + "/account/machines"], check=False)
+            handoff = ORIGIN + "/account/machines/confirm#" + urllib.parse.urlencode({"code": code})
+            subprocess.run(["/usr/bin/open", handoff], check=False)
             while time.time() < reply["expires_at"]:
                 time.sleep(3)
                 result = check_in(folder, ORIGIN, token)

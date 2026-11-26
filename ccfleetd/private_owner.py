@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS agy_enrollments (
 );
 CREATE TABLE IF NOT EXISTS private_owner_nodes (
     node_id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL UNIQUE,
+    account_id TEXT NOT NULL,
     monthly_cost_usd_cents INTEGER NOT NULL CHECK (monthly_cost_usd_cents >= 0),
     inference_enabled INTEGER NOT NULL DEFAULT 0 CHECK (inference_enabled IN (0,1)),
     public_usage_enabled INTEGER NOT NULL DEFAULT 0,
@@ -154,15 +154,18 @@ class PrivateOwnerStoreMixin:
     def _private_slot_annotations(self, slots: list[dict[str, Any]]) -> list[dict[str, Any]]:
         with self._lock:
             private = {
-                r["node_id"]: r["active_home"] for r in self._conn.execute(
-                    "SELECT p.node_id, h.owner_id AS active_home FROM private_owner_nodes p "
+                r["node_id"]: r for r in self._conn.execute(
+                    "SELECT p.node_id,h.owner_id AS active_home,h.name AS home_name "
+                    "FROM private_owner_nodes p "
                     "LEFT JOIN home_macs h ON h.node_id=p.node_id AND h.removed=0")
             }
             for slot in slots:
                 if slot["node_id"] in private:
                     slot["private_owner"] = True
-                    if private[slot["node_id"]] and slot.get("held_by") == private[slot["node_id"]]:
+                    home=private[slot["node_id"]]
+                    if home["active_home"] and slot.get("held_by")==home["active_home"]:
                         slot["home_mac"] = True
+                        slot["home_name"] = home["home_name"]
                     slot["inference_enabled"] = slot_allowed(
                         self._conn, slot["id"], slot.get("held_by") or ""
                     )
@@ -210,7 +213,8 @@ class PrivateOwnerStoreMixin:
                 raise StoreError("private owner inference requires an administrator account")
             if (
                 conn.execute(
-                    "SELECT 1 FROM private_owner_nodes WHERE account_id=?", (account_id,)
+                    "SELECT 1 FROM private_owner_nodes p WHERE account_id=? AND NOT EXISTS "
+                    "(SELECT 1 FROM home_macs h WHERE h.node_id=p.node_id)", (account_id,)
                 ).fetchone()
                 is not None
             ):
@@ -317,7 +321,8 @@ class PrivateOwnerStoreMixin:
 
         slot = conn.execute(
             "SELECT s.id,s.gateway_claim_id,s.gateway_generation FROM private_owner_nodes p "
-            "JOIN slots s ON s.id=p.node_id WHERE p.account_id=?", (owner,),
+            "JOIN slots s ON s.id=p.node_id WHERE p.account_id=? AND NOT EXISTS "
+            "(SELECT 1 FROM home_macs h WHERE h.node_id=p.node_id)", (owner,),
         ).fetchone()
         if slot is None or not eligible(conn, slot["id"], owner):
             raise StoreError("a ready private Mac owned by this account is required")

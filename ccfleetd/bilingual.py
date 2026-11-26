@@ -11,7 +11,8 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from . import reference_docs
 
 CURRENT_PAGES = frozenset({
-    '/', '/slots', '/account', '/account/machines', '/account/gemini',
+    '/', '/slots', '/account', '/account/machines', '/account/dedicated', '/account/machines/add',
+    '/account/machines/confirm', '/account/gemini',
     '/account/usage', '/account/available', '/account/purchase',
     '/account/renew',
     '/account/topup', '/account/subscribe', '/account/subscriptions', '/account/devin-trial',
@@ -35,7 +36,9 @@ ADMIN_ACTIONS = {
 }
 SLOT_ACTIONS = frozenset({'release', 'signin', 'switch', 'code', 'cancel', 'cli',
                         'cli-revoke', 'update', 'stable', 'rename', 'quota'})
-POST_PAGES = frozenset({'/account/machines/approve', '/account/machines/remove',
+POST_PAGES = frozenset({'/account/machines/probe','/account/machines/add-to-pool',
+                        '/account/dedicated/connect', '/account/machines/approve',
+                        '/account/machines/remove',
                         '/account/gemini/start', '/account/gemini/finish',
                        '/account/gemini/disconnect', '/account/gemini/workspace',
                        '/account/openrouter/create', '/account/openrouter/revoke',
@@ -313,6 +316,9 @@ class _Projection(HTMLParser):
                 # replaying the action or carrying one-time credentials.
                 if admin_form(path):
                     switch_target = '/admin'
+                elif path in {'/account/machines/probe', '/account/machines/add-to-pool',
+                              '/account/dedicated/connect'}:
+                    switch_target='/account/dedicated'
                 elif path in {'/account/machines/approve', '/account/machines/remove'}:
                     switch_target = '/account/machines'
                 elif path in {'/account/openrouter/create', '/account/openrouter/revoke'}:
@@ -327,6 +333,11 @@ class _Projection(HTMLParser):
                 search = ''
                 if switch_parts.path in {'/slots', '/account/available'}:
                     search = _slot_search_query(switch_parts.query)
+                elif switch_parts.path == '/account/dedicated':
+                    values=parse_qsl(switch_parts.query)
+                    if (len(values)==1 and values[0][0]=='slot'
+                            and re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}',values[0][1])):
+                        search=urlencode(values)
                 elif switch_parts.path == '/account/subscribe':
                     search = _subscription_query(switch_parts.query)
                 switch_target = urlunsplit(('', '', switch_parts.path, search,

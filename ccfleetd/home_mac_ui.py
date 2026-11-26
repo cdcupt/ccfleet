@@ -2,12 +2,11 @@
 
 import html
 
-from . import usersite
+from . import home_mac_motion, home_macs, usersite
 from .bilingual import label
 
 DOWNLOAD_URL = "/downloads/ccfleet-home-mac.command"
 FALLBACK_COMMAND = "/usr/bin/python3 ~/Downloads/ccfleet-home-mac.command"
-APPROVE_ACTION = "/account/machines/approve"
 REMOVE_ACTION = "/account/machines/remove"
 REFRESH_URL = "/account/machines"
 ACCOUNT_URL = "/account"
@@ -466,10 +465,11 @@ def _bi(en: str, zh: str) -> str:
     return label(en, zh, inline=True)
 
 
-def _empty(csrf):
+def _empty(csrf, *, confirm=False, account_email=""):
     instructions = _bi(
-        "Download and open the connector on the Mac mini or MacBook you own.",
-        "请在你自己的 Mac mini 或 MacBook 上下载并打开连接器。",
+        "Open the signed connector on the Mac mini or MacBook you want to add. "
+        "It connects outbound, even when your IP address changes.",
+        "请在要添加的 Mac mini 或 MacBook 上打开已签名连接器。即使 IP 变化，Mac 也能主动连接。",
     )
     fallback = _bi("You can also open it from Terminal.", "也可以在终端中打开。")
     requirements = _bi(
@@ -482,8 +482,8 @@ def _empty(csrf):
         "仅批准你自己 Mac 上显示的连接码。你的 Fleet 账户随后可使用该 Mac 已登录的 Claude。",
     )
     hint = _bi("Enter the ten characters shown by the connector.", "输入连接器显示的十位连接码。")
-    return f"""
-<ol class="hm-steps">
+    action = home_macs.ADD_ACTION
+    open_step = f"""
   <li class="hm-step">
     <div class="hm-step-head"><span class="hm-step-num" aria-hidden="true">1</span>
       <h2>{_bi("Open the connector on your Mac", "在 Mac 上打开连接器")}</h2></div>
@@ -495,29 +495,38 @@ def _empty(csrf):
       <p class="hm-fallback-label">{fallback} {requirements}</p>
       <code class="hm-cmd">{FALLBACK_COMMAND}</code></details>
   </li>
+"""
+    return (
+        '<ol class="hm-steps">'
+        + ("" if confirm else open_step)
+        + f"""
   <li class="hm-step">
     <div class="hm-step-head"><span class="hm-step-num" aria-hidden="true">2</span>
       <h2>{_bi("Approve this Mac", "批准此 Mac")}</h2></div>
-    <form class="hm-form" method="post" action="{APPROVE_ACTION}">
+    <form class="hm-form" method="post" action="{action}">
       <input type="hidden" name="csrf" value="{csrf}">
       <div class="hm-fields">
         <label class="hm-field"><span>{_bi("Connector code", "连接码")}</span>
-          <input class="hm-input hm-input-code" name="code" required maxlength="11"
+          <input class="hm-input hm-input-code" data-hm-code name="code" required maxlength="11"
                  pattern="[A-Za-z0-9]{{5}}-?[A-Za-z0-9]{{5}}" autocapitalize="characters"
                  spellcheck="false" autocomplete="one-time-code" aria-describedby="hm-code-hint">
           <small id="hm-code-hint" class="hm-hint">{hint}</small></label>
         <label class="hm-field"><span>{_bi("Machine name", "设备名称")}</span>
           <input class="hm-input" name="name" maxlength="48" required autocomplete="off"></label>
       </div>
-      <p class="hm-notice">{consent}</p>
+      <p class="hm-notice">{consent}<br>{_bi("Fleet account", "Fleet 账户")}
+        <strong>{html.escape(account_email)}</strong></p>
       <div class="hm-actions"><button class="btn hm-btn-primary" type="submit">
         {_bi("Approve this Mac", "批准此 Mac")}</button></div>
     </form>
   </li>
 </ol>"""
+    )
 
 
 def _registered(machine, csrf):
+    from .dedicated_slots import slot_url
+
     states = {
         "online": (
             _bi("Online", "在线"),
@@ -560,8 +569,8 @@ def _registered(machine, csrf):
   <p class="hm-copy">{note}</p>
   <dl class="hm-meta"><div><dt>{_bi("Fleet tunnel", "Fleet 隧道")}</dt><dd>{tunnel}</dd></div>
     <div><dt>{_bi("Model provider", "模型服务")}</dt><dd>{provider}</dd></div></dl>
-  <div class="hm-actions"><a class="btn hm-btn-primary" href="/account">
-    {_bi("Open your slots", "打开我的槽位")}</a>
+  <div class="hm-actions"><a class="btn hm-btn-primary" href="{slot_url(machine["slot_id"])}">
+    {_bi("Use this slot", "使用此槽位")}</a>
     <a class="btn hm-btn-subtle" href="{REFRESH_URL}">{_bi("Refresh status", "刷新状态")}</a></div>
 </section>
 <details class="hm-remove"><summary>{_bi("Remove Mac", "移除 Mac")}</summary>
@@ -573,32 +582,42 @@ def _registered(machine, csrf):
     </form></div></details>"""
 
 
-def page(viewer, machine=None, *, error=None):
-    csrf = html.escape(viewer.csrf, quote=True)
-    if machine is None:
-        heading = _bi("Add a Mac", "添加 Mac")
-        lead = _bi(
-            "Connect a personal Mac over Wi-Fi or Ethernet. Your router needs no changes.",
-            "通过 Wi-Fi 或以太网连接个人 Mac，无需更改路由器设置。",
+CONNECTION_CSS = home_mac_motion.CSS
+connection = home_mac_motion.panel
+script_tag = home_mac_motion.script_tag
+
+
+def enrollment(viewer, machines, *, confirm=False, add=False, error=None):
+    csrf = html.escape(viewer.csrf, quote=True) if viewer else ""
+    title = _bi("Approve this Mac", "批准此 Mac") if confirm else _bi("Add my Mac", "添加我的 Mac")
+    if not viewer:
+        main = (
+            '<a class="btn primary" href="/auth/google/start?next=/account/machines/confirm">'
+            + _bi("Sign in to approve this Mac", "登录并批准此 Mac")
+            + "</a>"
         )
-        content = _empty(csrf)
+    elif add or confirm or not machines:
+        main = _empty(csrf, confirm=confirm, account_email=viewer.account.get("email", ""))
     else:
-        heading = _bi("My machines", "我的设备")
-        lead = _bi(
-            "Manage your private Mac and check its connection.", "管理你的个人 Mac 并查看连接状态。"
+        title = _bi("My machines", "我的设备")
+        main = (
+            '<a class="btn primary" href="'
+            + home_macs.ADD
+            + '">'
+            + _bi("Add my Mac", "添加我的 Mac")
+            + "</a>"
+            + "".join(_registered(m, csrf) for m in machines)
         )
-        content = _registered(machine, csrf)
-    notice = f'<p class="hm-alert" role="alert">{_bi(*error)}</p>' if error else ""
+    alert = '<p role="alert">' + _bi(*error) + "</p>" if error else ""
     body = (
-        f'<div class="hm-page"><a class="hm-back" href="{ACCOUNT_URL}">← '
+        '<div class="hm-page"><a href="/account">'
         + _bi("Account", "账户")
-        + '</a><header class="hm-head"><h1>'
-        + heading
-        + '</h1><p class="hm-lead">'
-        + lead
-        + "</p></header>"
-        + notice
-        + content
+        + "</a><h1>"
+        + title
+        + "</h1>"
+        + alert
+        + main
         + "</div>"
+        + script_tag()
     )
-    return usersite._shell("My machines", body, extra_css=CSS, width="home-machines", viewer=viewer)
+    return usersite._shell("My machines", body, extra_css=CSS, viewer=viewer, width="home-machines")

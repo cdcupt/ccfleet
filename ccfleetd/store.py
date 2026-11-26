@@ -39,6 +39,7 @@ from . import (
     gateway_access,
     gateway_providers,
     gemini_setup_store,
+    home_mac_migration,
     home_mac_transport,
     home_macs,
     names,
@@ -649,10 +650,13 @@ class Store(openrouter_billing.OpenRouterStore,
             self._conn.executescript(SCHEMA + wallet_topups.SCHEMA + slot_subscriptions.SCHEMA
                                      + api_model_routes.SCHEMA + openrouter_billing.SCHEMA
                                      + home_macs.SCHEMA + home_mac_transport.SCHEMA)
-            self._add_missing_columns("home_macs", {"tunnel_seen": "REAL"})
+            self._add_missing_columns("home_macs", {"tunnel_seen": "REAL",
+                "probe_requested": "INTEGER NOT NULL DEFAULT 0", "probe_started": "REAL",
+                "probe_finished": "REAL", "probe_ok": "INTEGER NOT NULL DEFAULT 0"})
             self._add_missing_columns("private_owner_nodes", {
                 "public_usage_enabled": "INTEGER NOT NULL DEFAULT 0",
             })
+            home_mac_migration.upgrade(self)
             self._add_missing_columns("usage_ledger_sources", {
                 "review_until_day": "INTEGER NOT NULL DEFAULT -1",
             })
@@ -2072,8 +2076,9 @@ class Store(openrouter_billing.OpenRouterStore,
             raise StoreError("role must be 'user' or 'admin'")
         with self._write_txn() as conn:
             if role != "admin":
-                for private in conn.execute("SELECT node_id FROM private_owner_nodes "
-                                            "WHERE account_id=?",
+                for private in conn.execute("SELECT p.node_id FROM private_owner_nodes p "
+                                            "WHERE p.account_id=? AND NOT EXISTS "
+                                            "(SELECT 1 FROM home_macs h WHERE h.node_id=p.node_id)",
                                              (account_id,)).fetchall():
                     private_owner.invalidate(conn, private["node_id"])
                     conn.execute("UPDATE private_owner_nodes SET inference_enabled=0 "
@@ -3419,7 +3424,8 @@ class Store(openrouter_billing.OpenRouterStore,
                            mode: str = "sticky", *, now: float,
                            provider: str = "anthropic", allow_devin: bool = False,
                            pairing_device_id: Optional[str] = None,
-                           provider_runtime: Optional[Mapping[str, Any]] = None
+                           provider_runtime: Optional[Mapping[str, Any]] = None,
+                           expected_claim: Optional[tuple[str,str]] = None
                            ) -> dict[str, Any]:
         """Mint one API credential for an ordered pool of the holder's slots."""
         normalized_name = gateway_access.normalize_name(name)
@@ -3429,6 +3435,9 @@ class Store(openrouter_billing.OpenRouterStore,
         key_id = "g" + secrets.token_hex(8)
         with self._write_txn() as conn:
             selected, claims = self._gateway_selection(conn, account_id, slot_ids, mode)
+            if expected_claim and (selected != [expected_claim[0]]
+                    or claims.get(expected_claim[0]) != expected_claim[1]):
+                raise StoreError("the selected slot assignment changed")
             self._gateway_provider_selection(conn, account_id, selected, provider,
                 allow_devin=allow_devin, now=now, provider_runtime=provider_runtime)
             count = conn.execute("SELECT COUNT(*) FROM gateway_keys WHERE account_id = ? "

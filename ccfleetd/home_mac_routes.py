@@ -4,9 +4,11 @@ import contextlib
 import re
 import threading
 import time
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
-from . import home_mac_bundle, home_macs, usersite
+from . import dedicated_slots, home_mac_bundle, home_mac_motion, home_mac_probe, home_macs, usersite
+
+PAGES = {home_macs.PAGE, home_macs.ADD, home_macs.CONFIRM, home_macs.POOL}
 
 DOWNLOAD = "/downloads/ccfleet-home-mac.command"
 DOWNLOADS = {
@@ -54,21 +56,45 @@ def invited(cfg, account):
     return account["id"] in cfg.home_mac_owners or "*" in cfg.home_mac_owners
 
 
-def render(handler, ctx, account, session, status=200, error=None):
+def send_page(handler, status, body):
     from .api import HTML_HEADERS
-    from .home_mac_ui import page
 
-    viewer = usersite.viewer_for(account, session, ctx.cfg, ctx.store)
-    body = page(viewer, home_macs.for_owner(ctx.store, account["id"], time.time()), error=error)
     headers = dict(HTML_HEADERS)
-    headers["Content-Security-Policy"] += (
-        "; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    headers["Content-Security-Policy"] = (
+        headers["Content-Security-Policy"].replace(
+            "script-src ", "script-src " + home_mac_motion.CSP + " ", 1
+        )
+        + "; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
     )
     handler._send(status, body.encode(), headers)
 
 
+def query_slot(handler):
+    params = parse_qs(urlsplit(handler.path).query, keep_blank_values=True, max_num_fields=3)
+    if not params:
+        return ""
+    if (
+        set(params) != {"slot"}
+        or len(params["slot"]) != 1
+        or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", params["slot"][0])
+    ):
+        raise ValueError("invalid slot selection")
+    return params["slot"][0]
+
+
+def render(handler, ctx, account, session, status=200, error=None, *, add=False, confirm=False):
+    from .home_mac_ui import enrollment
+
+    viewer = usersite.viewer_for(account, session, ctx.cfg, ctx.store) if account else None
+    machines = home_macs.list_for_owner(ctx.store, account["id"], time.time()) if account else []
+    send_page(handler, status, enrollment(viewer, machines, confirm=confirm, add=add, error=error))
+
+
 def get(handler, ctx, path):
-    if not enabled(ctx, handler):
+    if not (
+        enabled(ctx, handler)
+        or (path == home_macs.POOL and handler._product_site() and not ctx.cfg.broker_only)
+    ):
         handler._json(404, {"error": "not found"})
         return
     if path in DOWNLOADS:
@@ -106,30 +132,119 @@ def get(handler, ctx, path):
         return
     account, session = handler._signed_in()
     if not account:
+        if path == home_macs.STATUS:
+            handler._json(401, {"error": "sign in required"})
+            return
+        if path == home_macs.CONFIRM:
+            render(handler, ctx, None, "", confirm=True)
+            return
         if ctx.cfg.google_ready:
-            destination = handler._page_location(home_macs.PAGE)
+            destination = handler._page_location(path)
             handler._redirect("/auth/google/start?" + urlencode({"next": destination}))
         else:
             handler._redirect("/account")
-    elif not invited(ctx.cfg, account):
+    elif path != home_macs.POOL and not invited(ctx.cfg, account):
         handler._json(404, {"error": "not found"})
+    elif path in (home_macs.POOL, home_macs.STATUS):
+        try:
+            sid = query_slot(handler)
+            if path == home_macs.STATUS:
+                machine = home_macs.for_slot(ctx.store, account["id"], sid, time.time())
+                if not machine:
+                    raise home_macs.denied()
+                handler._json(
+                    200, {"state": machine["tunnel_state"]}, {"Cache-Control": "no-store"}
+                )
+            else:
+                send_page(
+                    handler,
+                    200,
+                    dedicated_slots.page(ctx.store, ctx.cfg, account, session, time.time(), sid),
+                )
+        except (ValueError, home_macs.Error):
+            handler._json(404, {"error": "slot unavailable"})
     else:
-        render(handler, ctx, account, session)
+        render(
+            handler,
+            ctx,
+            account,
+            session,
+            add=path == home_macs.ADD,
+            confirm=path == home_macs.CONFIRM,
+        )
 
 
 def account_action(handler, ctx, account, session, path, form):
-    if not enabled(ctx, handler) or not invited(ctx.cfg, account):
+    if (
+        not handler._product_site()
+        or ctx.cfg.broker_only
+        or (
+            path != home_macs.POOL + "/connect"
+            and (not enabled(ctx, handler) or not invited(ctx.cfg, account))
+        )
+    ):
         handler._json(404, {"error": "not found"})
         return
     try:
-        if path.endswith("/approve") and set(form) == {"csrf", "code", "name"}:
-            home_macs.approve(ctx.store, account["id"], form["code"], form["name"], time.time())
+        if path in (home_macs.PAGE + "/approve", home_macs.ADD_ACTION) and set(form) == {
+            "csrf",
+            "code",
+            "name",
+        }:
+            node = home_macs.approve(
+                ctx.store,
+                account["id"],
+                form["code"],
+                form["name"],
+                time.time(),
+                check_tunnel=path == home_macs.ADD_ACTION,
+            )
+            if path == home_macs.ADD_ACTION:
+                handler._redirect(dedicated_slots.slot_url(node))
+                return
+        elif path == home_macs.PROBE and set(form) == {"csrf", "slot"}:
+            home_mac_probe.request(ctx.store, account["id"], form["slot"], time.time())
+            handler._redirect(dedicated_slots.slot_url(form["slot"]))
+            return
+        elif path == home_macs.POOL + "/connect":
+            result = dedicated_slots.connect(
+                ctx.store, ctx.cfg, account, session, form, time.time()
+            )
+            if result.location:
+                handler._redirect(result.location)
+            else:
+                send_page(handler, result.status, result.body)
+            return
         elif path.endswith("/remove") and set(form) == {"csrf", "node_id"}:
             home_macs.remove(ctx.store, account["id"], form["node_id"], time.time())
         else:
             raise home_macs.invalid()
     except home_macs.Error as exc:
-        render(handler, ctx, account, session, exc.status, exc.message)
+        if path in (home_macs.POOL + "/connect", home_macs.PROBE):
+            try:
+                body = dedicated_slots.page(
+                    ctx.store,
+                    ctx.cfg,
+                    account,
+                    session,
+                    time.time(),
+                    form.get("slot", ""),
+                    exc.message,
+                )
+            except home_macs.Error:
+                handler._json(403, {"error": "slot unavailable"})
+            else:
+                send_page(handler, exc.status, body)
+        else:
+            render(
+                handler,
+                ctx,
+                account,
+                session,
+                exc.status,
+                exc.message,
+                confirm=path == home_macs.ADD_ACTION,
+            )
         return
     handler._redirect(home_macs.PAGE)
 
@@ -240,4 +355,7 @@ def wait_for_stream(ctx, token):
     if not node:
         raise home_macs.denied()
     # Idle Macs release the HTTP worker immediately.
-    return {"ticket": home_mac_transport.take(ctx.store, node["registration_id"], time.time())}
+    ticket = home_mac_transport.take(ctx.store, node["registration_id"], time.time())
+    if not ticket:
+        home_mac_probe.start_if_requested(ctx.store, ctx.cfg.db_path, node["registration_id"])
+    return {"ticket": ticket}

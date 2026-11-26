@@ -14,7 +14,13 @@ from ccfleet_agent.client_release import ReleaseError, trusted_public_key
 from . import home_mac_transport, private_owner
 
 PAGE = "/account/machines"
-ACTIONS = {PAGE + "/approve", PAGE + "/remove"}
+ADD = PAGE + "/add"
+CONFIRM = PAGE + "/confirm"
+POOL = "/account/dedicated"
+PROBE = PAGE + "/probe"
+STATUS = PAGE + "/status"
+ADD_ACTION = PAGE + "/add-to-pool"
+ACTIONS = {PAGE + "/approve", PAGE + "/remove", PROBE, ADD_ACTION, POOL + "/connect"}
 API = "/api/home-macs/"
 TTL = 600
 OFFLINE_AFTER = 120
@@ -28,7 +34,7 @@ CREATE TABLE IF NOT EXISTS home_mac_pending (
 );
 CREATE INDEX IF NOT EXISTS home_mac_pending_expiry ON home_mac_pending(expires);
 CREATE TABLE IF NOT EXISTS home_macs (
- registration_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL UNIQUE,
+ registration_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL,
  node_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, public_key TEXT NOT NULL,
  device_hash TEXT NOT NULL UNIQUE, seen REAL, tunnel_seen REAL, removed INTEGER NOT NULL DEFAULT 0
 );
@@ -172,7 +178,7 @@ def begin(store, secret, token, fields, now):
     return {"state": "pending", "code": code_for(secret, device, expiry), "expires_at": expiry}
 
 
-def approve(store, owner, code, name, now):
+def approve(store, owner, code, name, now, *, check_tunnel=False):
     code = code.strip().upper().replace("-", "")
     name = name.strip()
     if not re.fullmatch(f"[{ALPHABET}]{{10}}", code):
@@ -187,49 +193,29 @@ def approve(store, owner, code, name, now):
         ).fetchone()
         if not row:
             raise invalid()
-        prior = conn.execute(
-            "SELECT p.node_id,h.removed FROM private_owner_nodes p LEFT JOIN "
-            "home_macs h ON h.node_id=p.node_id WHERE p.account_id=?",
-            (owner,),
-        ).fetchone()
-        if prior and prior["removed"] != 1:
-            raise Error(409, "This account already has a private Mac.", "此账户已有一台专属 Mac。")
         if conn.execute(
             "SELECT 1 FROM home_macs WHERE public_key=? AND removed=0", (row["public_key"],)
         ).fetchone():
             raise denied()
         # The report credential is activated only when the approved Mac checks in.
-        node = prior["node_id"] if prior else "home-" + secrets.token_hex(12)
+        node = "home-" + secrets.token_hex(12)
         registration = secrets.token_hex(16)
         dormant = secrets.token_hex(32)
-        if prior:
-            private_owner.invalidate(conn, node)
-            conn.execute(
-                "UPDATE nodes SET enabled=1,owner=?,token_hash=?,access_host='',"
-                "access_port=22,ssh_host_key=? WHERE id=?",
-                (row["unix_user"], dormant, row["host_key"], node),
-            )
-            conn.execute(
-                "UPDATE slots SET unix_user=?,claimed_at=? WHERE id=?",
-                (row["unix_user"], now, node),
-            )
-            conn.execute("DELETE FROM home_macs WHERE owner_id=?", (owner,))
-        else:
-            conn.execute(
-                "INSERT INTO nodes(id,owner,token_hash,created_at,ssh_host_key) VALUES (?,?,?,?,?)",
-                (node, row["unix_user"], dormant, now, row["host_key"]),
-            )
-            conn.execute(
-                "INSERT INTO slots(id,node_id,unix_user,state,held_by,claimed_at,kind,"
-                "gateway_claim_id)"
-                " VALUES (?,?,?,'active',?,?,'owner',?)",
-                (node, node, row["unix_user"], owner, now, secrets.token_hex(16)),
-            )
-            conn.execute(
-                "INSERT INTO private_owner_nodes(node_id,account_id,monthly_cost_usd_cents,"
-                "created_at,updated_at) VALUES (?,?,0,?,?)",
-                (node, owner, now, now),
-            )
+        conn.execute(
+            "INSERT INTO nodes(id,owner,token_hash,created_at,ssh_host_key) VALUES (?,?,?,?,?)",
+            (node, row["unix_user"], dormant, now, row["host_key"]),
+        )
+        conn.execute(
+            "INSERT INTO slots(id,node_id,unix_user,state,held_by,claimed_at,kind,"
+            "gateway_claim_id)"
+            " VALUES (?,?,?,'active',?,?,'owner',?)",
+            (node, node, row["unix_user"], owner, now, secrets.token_hex(16)),
+        )
+        conn.execute(
+            "INSERT INTO private_owner_nodes(node_id,account_id,monthly_cost_usd_cents,"
+            "created_at,updated_at) VALUES (?,?,0,?,?)",
+            (node, owner, now, now),
+        )
         conn.execute(
             "INSERT INTO home_macs(registration_id,owner_id,node_id,name,public_key,device_hash) "
             "VALUES (?,?,?,?,?,?)",
@@ -243,7 +229,12 @@ def approve(store, owner, code, name, now):
             "UPDATE private_owner_nodes SET inference_enabled=1,updated_at=? WHERE node_id=?",
             (now, node),
         )
+        if check_tunnel:
+            conn.execute(
+                "UPDATE home_macs SET probe_requested=1 WHERE registration_id=?", (registration,)
+            )
         conn.execute("DELETE FROM home_mac_pending WHERE device_hash=?", (row["device_hash"],))
+        return node
 
 
 def check_in(store, token, now):
@@ -269,51 +260,74 @@ def check_in(store, token, now):
             conn.execute(
                 "UPDATE nodes SET token_hash=? WHERE id=?", (hash_token(reporting), row["node_id"])
             )
+        if row["seen"] is not None and now - row["seen"] > OFFLINE_AFTER and row["probe_started"]:
+            conn.execute(
+                "UPDATE home_macs SET probe_requested=1,probe_started=NULL,"
+                "probe_finished=NULL,probe_ok=0 WHERE registration_id=?",
+                (row["registration_id"],),
+            )
         conn.execute(
             "UPDATE home_macs SET seen=? WHERE registration_id=?", (now, row["registration_id"])
         )
         return {"state": "registered", "node_id": row["node_id"], "name": row["name"]}
 
 
+def list_for_owner(store, owner, now, *, slot_id=None):
+    with store._lock:
+        rows = store._conn.execute(
+            "SELECT h.*,h.registration_id AS id,s.unix_user,s.claimed_at FROM home_macs h "
+            "JOIN slots s ON s.id=h.node_id AND s.held_by=h.owner_id "
+            "WHERE h.owner_id=? AND h.removed=0 "
+            + ("AND h.node_id=? " if slot_id is not None else "")
+            + "ORDER BY s.claimed_at,h.node_id",
+            (owner, slot_id) if slot_id is not None else (owner,),
+        ).fetchall()
+        return [_describe(store, row, now) for row in rows]
+
+
+def for_slot(store, owner, slot_id, now):
+    rows = list_for_owner(store, owner, now, slot_id=slot_id)
+    return rows[0] if rows else None
+
+
 def for_owner(store, owner, now):
+    """Single-Mac compatibility accessor. Ambiguous selections require an explicit slot."""
+    rows = list_for_owner(store, owner, now)
+    return rows[0] if len(rows) == 1 else None
+
+
+def _describe(store, row, now):
     import json
 
-    with store._lock:
-        db = store._conn
-        row = db.execute(
-            "SELECT h.registration_id AS id,h.name,h.seen,h.tunnel_seen,h.node_id,s.unix_user,"
-            "s.claimed_at FROM home_macs h JOIN slots s ON s.id=h.node_id "
-            "WHERE h.owner_id=? AND h.removed=0",
-            (owner,),
-        ).fetchone()
-        if not row:
-            return None
-        state = (
-            "waiting"
-            if row["seen"] is None
-            else ("online" if 0 <= now - row["seen"] <= OFFLINE_AFTER else "offline")
-        )
-        provider = "unconfirmed"
-        latest = db.execute(
-            "SELECT ts,payload FROM heartbeats WHERE node_id=? ORDER BY ts DESC,id DESC LIMIT 1",
-            (row["node_id"],),
-        ).fetchone()
-        if latest and max(now - 180, row["claimed_at"]) <= latest["ts"] <= now:
-            if store._gateway_report_ready(
-                db, row["node_id"], row["unix_user"], private=True, now=now
-            ):
-                provider = "ready"
-            else:
-                credentials = json.loads(latest["payload"]).get("credentials") or {}
-                if credentials.get("logged_in") is False:
-                    provider = "sign_in"
-        return {
-            "id": row["id"],
-            "name": row["name"],
-            "state": state,
-            "provider": provider,
-            "tunnel_seen": row["tunnel_seen"] is not None,
-        }
+    from . import home_mac_probe
+
+    db = store._conn
+    state = (
+        "waiting"
+        if row["seen"] is None
+        else ("online" if 0 <= now - row["seen"] <= OFFLINE_AFTER else "offline")
+    )
+    provider = "unconfirmed"
+    latest = db.execute(
+        "SELECT ts,payload FROM heartbeats WHERE node_id=? ORDER BY ts DESC,id DESC LIMIT 1",
+        (row["node_id"],),
+    ).fetchone()
+    if latest and max(now - 180, row["claimed_at"]) <= latest["ts"] <= now:
+        if store._gateway_report_ready(db, row["node_id"], row["unix_user"], private=True, now=now):
+            provider = "ready"
+        else:
+            credentials = json.loads(latest["payload"]).get("credentials") or {}
+            if credentials.get("logged_in") is False:
+                provider = "sign_in"
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "slot_id": row["node_id"],
+        "tunnel_state": home_mac_probe.state(row, now),
+        "state": state,
+        "provider": provider,
+        "tunnel_seen": row["tunnel_seen"] is not None,
+    }
 
 
 def remove(store, owner, registration, now):
