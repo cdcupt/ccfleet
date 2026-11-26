@@ -1610,7 +1610,7 @@ def _additional_slot_setup() -> str:
     )
 
 
-def _guide_navigation() -> str:
+def _guide_navigation(*, personal_mac: bool = False) -> str:
     links = (("setup", "First computer", "首次连接电脑"),
              ("add-slot", "Add another slot", "添加另一个槽位"),
              ("model-connections", "Sticky & priority", "会话保持与优先级"),
@@ -1619,6 +1619,9 @@ def _guide_navigation() -> str:
              ("agent-apps", "Orca, Herdr and T3", "Orca、Herdr 与 T3"),
              ("local-work", "Files & conversations", "文件与会话"),
              ("slot-care", "Slot care", "管理槽位"))
+
+    if personal_mac:
+        links = (("personal-mac", "Add your own Mac", "添加自己的 Mac"), *links)
 
     def navigation(title: str, language: int) -> str:
         return ('<nav class="guide-jumps" aria-label="' + escape(title, quote=True) + '">'
@@ -1790,6 +1793,41 @@ def _agent_app_guide() -> str:
     )
 
 
+def _personal_mac_guide() -> str:
+    from .home_mac_ui import APPLE_TOOLS_GUIDE
+
+    return (
+        '<section class="card" id="personal-mac">'
+        + bi('<h2>Set up a new Mac as a private slot</h2>', '<h2>将新 Mac 添加为专属槽位</h2>')
+        + bi(
+            '<ol><li>On the Mac mini or MacBook you want to add, install Apple’s Command Line '
+            'Tools if they are missing. They provide Python 3 for the connector. '
+            f'<a href="{APPLE_TOOLS_GUIDE}">Apple’s graphical installer instructions</a>.</li>'
+            '<li>Sign in to Fleet and select <a href="/account/machines/add">Add my Mac</a>. '
+            'Download and open the signed connector on that Mac. It may open a Terminal window. '
+            'Name and approve the Mac in your browser. The Fleet CLI is optional.</li>'
+            '<li>Fleet checks the tunnel. Find your Mac under '
+            '<a href="/account/dedicated">Dedicated slots</a> and choose a compatible service. '
+            'The Mac connects outbound over HTTPS and WebSockets, so a changing home IP works '
+            'without router port forwarding.</li></ol>'
+            '<p>To use Claude through this slot, install Claude Code on the Mac and sign in '
+            'there. You can register the Mac first.</p>',
+            '<ol><li>在要添加的 Mac mini 或 MacBook 上，如果尚未安装 Apple 命令行工具，'
+            '请先安装。连接器需要这些工具提供的 Python 3。'
+            f'<a href="{APPLE_TOOLS_GUIDE}">查看 Apple 图形安装程序说明</a>。</li>'
+            '<li>登录 Fleet，选择<a href="/account/machines/add">添加我的 Mac</a>。'
+            '在这台 Mac 上下载并打开已签名的连接器。启动时可能会打开“终端”窗口。'
+            '在浏览器中为 Mac 命名并批准连接。Fleet CLI 为可选工具。</li>'
+            '<li>Fleet 会检测隧道。打开<a href="/account/dedicated">专属槽位</a>，'
+            '选择这台 Mac 及其支持的服务。Mac 通过 HTTPS 和 WebSocket 主动连接，'
+            '即使家庭 IP 发生变化，也无需设置路由器端口转发。</li></ol>'
+            '<p>可以先注册 Mac。要通过这个槽位使用 Claude，'
+            '请在该 Mac 上安装并登录 Claude Code。</p>',
+        )
+        + '</section>'
+    )
+
+
 def guide(
     cfg: Config, viewer: Optional[Viewer] = None, *, price: Optional[pricing.Price] = None,
     per_slot_pricing: bool = False, wallet_enabled: bool = False,
@@ -1813,6 +1851,9 @@ def guide(
                     '在<a href="/account/available">浏览可用槽位</a>按所示价格选择主机，'
                     '并直接向运营者付款；'
                     '本站不会自动扣款或自动续费。')
+    personal_mac = "*" in cfg.home_mac_owners or bool(
+        viewer and viewer.account.get("id") in cfg.home_mac_owners
+    )
     body = (
         '<div class="dochead">'
         + bi("<h1>Getting started</h1>", "<h1>开始使用</h1>")
@@ -1822,8 +1863,11 @@ def guide(
             '<p class="lead">你的电脑负责工作，槽位上你自己的服务商 '
             "账号负责模型访问。按下面几步，把两边准备好。</p>",
         )
-        + _guide_navigation()
-        + '</div><ol class="steps">'
+        + _guide_navigation(personal_mac=personal_mac)
+        + "</div>"
+        + (_personal_mac_guide() + bi("<h2>Set up a hosted slot</h2>", "<h2>设置托管槽位</h2>")
+           if personal_mac else "")
+        + '<ol class="steps">'
         + "<li>"
         + bi(
             '<h3>Sign in</h3><p>Open <a href="/account">Your slots</a> and choose <span '
