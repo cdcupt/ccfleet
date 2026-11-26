@@ -716,11 +716,22 @@ def run(binary: Any, project: Any, command: list, profile: Optional[Path] = None
                 env = client_environment(profile, Path(scratch), url, key)
                 session.model_status = Path(scratch) / "slot-model.txt"
                 session.model_status.write_text("Paired slot · awaiting first reply\n")
-                footer = {"statusLine": {
-                    "type": "command", "stack_with_default": False,
-                    "command": "/bin/cat " + shlex.quote(str(session.model_status)),
-                }}
-                ui_command = [str(binary), "--settings", json.dumps(footer)]
+                # agy's startup header identifies its local API route. The slot only
+                # reports the model that answered once a turn has completed.
+                alias = "ccfleet-paired-slot"
+                ui_settings = {
+                    "customModelsConfig": {
+                        "customModels": {
+                            alias: {"modelName": "gemini-api://" + alias,
+                                    "label": "CCFleet paired slot"},
+                        },
+                    },
+                    "statusLine": {
+                        "type": "command", "stack_with_default": False,
+                        "command": "/bin/cat " + shlex.quote(str(session.model_status)),
+                    },
+                }
+                ui_command = [str(binary), "--settings", json.dumps(ui_settings), "--model", alias]
                 if review:
                     notice = "Local tool approval prompts enabled."
                 else:

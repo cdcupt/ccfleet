@@ -521,7 +521,7 @@ def test_manifest_installed_terminal_runs_without_component_download(tmp_path, m
 
 
 @pytest.mark.parametrize("review", [False, True])
-def test_native_permissions_apply_to_the_local_agy_process(tmp_path, monkeypatch, review):
+def test_native_header_and_permissions_apply_to_the_local_agy_process(tmp_path, monkeypatch, review):
     launched = []
     stream = packet({"ready": "ccfleet-native-v1"})
 
@@ -543,9 +543,15 @@ def test_native_permissions_apply_to_the_local_agy_process(tmp_path, monkeypatch
     assert launched[0] == transport
     command = launched[1]
     assert command[:2] == [str(binary.resolve()), "--settings"]
-    status = json.loads(command[2])["statusLine"]
+    settings = json.loads(command[2])
+    alias = "ccfleet-paired-slot"
+    assert settings["customModelsConfig"]["customModels"][alias] == {
+        "modelName": "gemini-api://" + alias, "label": "CCFleet paired slot",
+    }
+    assert command[3:5] == ["--model", alias]
+    status = settings["statusLine"]
     assert status["command"].startswith("/bin/cat ") and not status["stack_with_default"]
-    assert command[3:] == ([] if review else ["--dangerously-skip-permissions"])
+    assert command[5:] == ([] if review else ["--dangerously-skip-permissions"])
 
 
 @pytest.mark.parametrize("current,submitted,expected", [
@@ -572,7 +578,7 @@ def test_status_uses_only_slot_reply_metadata_including_legacy_turns(tmp_path, m
     session = terminal.Session(relay(), tmp_path, tmp_path, pump=False)
     session.model_status = tmp_path / "slot-model.txt"
     monkeypatch.setattr(terminal.secrets, "token_hex", lambda _: "a" * 32)
-    path = "/v1beta/models/gemini-3.1-pro:streamGenerateContent?alt=sse"
+    path = "/v1beta/models/ccfleet-paired-slot:streamGenerateContent?alt=sse"
     for i, (fields, label) in enumerate((
         ({"model": "gemini-4-neon-high"}, "Last slot reply · Gemini 4 Neon · high"),
         ({}, "Paired slot · model not reported"),
