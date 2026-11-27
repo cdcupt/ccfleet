@@ -467,3 +467,14 @@ def test_openrouter_usd_formatting_precision():
         == '<span title="$15.424971401648">$15.42</span>'
     )
 
+
+def test_openrouter_page_documents_image_mode_and_tags_image_models(router):
+    c = router
+    for lang, expected_tag in (("en", "Images"), ("zh", "支持图片")):
+        resp = c.browser("alice").call("GET", f"/{lang}/account/openrouter", headers=c.public)
+        assert resp.status == 200
+        _assert_csp_and_locale(resp, lang)
+        assert "ccfleet openrouter-images" in resp.body
+        assert "0.2.30" in resp.body
+        assert expected_tag in resp.body
+

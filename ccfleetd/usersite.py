@@ -515,6 +515,18 @@ body.site{font-size:15.5px;display:flex;flex-direction:column;min-height:100vh}
 .site .page{max-width:1240px;padding-block:48px 88px}
 .site .page.narrow{max-width:900px}
 .site .page.doc{max-width:860px}
+.site .page.home-machines{max-width:960px}
+.account-dashboard .dedicated-entry{display:flex;flex-wrap:wrap;align-items:center;
+justify-content:space-between;gap:14px 20px;padding:18px 24px;margin:0 0 18px}
+.account-dashboard .dedicated-entry-copy{display:grid;gap:4px;min-width:0}
+.account-dashboard .dedicated-eyebrow{margin:0;color:var(--acc);font-size:11.5px;font-weight:700;
+letter-spacing:.08em;text-transform:uppercase}
+.account-dashboard .dedicated-sub{margin:0;color:var(--muted);font-size:13.5px;line-height:1.55}
+.account-dashboard .dedicated-entry-actions{display:flex;flex-wrap:wrap;align-items:center;
+gap:10px}
+@media(max-width:640px){.account-dashboard .dedicated-entry{padding:16px 18px}
+.account-dashboard .dedicated-entry-actions,
+.account-dashboard .dedicated-entry-actions .btn{width:100%;justify-content:center}}
 
 /* The bar's links: crisp editorial navigation with sliding bottom rule. */
 .doc-nav{display:flex;align-items:center;gap:6px;font-size:14px;min-width:0;
@@ -1008,8 +1020,9 @@ overflow-x:auto;justify-content:flex-start}
 .account-dashboard .account-heading h1{font-size:28px}
 .account-dashboard .account-heading .sub{font-size:13px}
 .account-dashboard .account-heading>.btn{font-size:12.5px;padding:7px 12px}
-.account-dashboard .account-nav{gap:2px 14px;flex-wrap:nowrap;overflow-x:auto}
-.account-dashboard .account-nav .btn{white-space:nowrap;flex:0 0 auto}
+.account-nav{gap:2px 14px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+.account-nav::-webkit-scrollbar{display:none}
+.account-nav .btn{white-space:nowrap;flex:0 0 auto}
 .account-dashboard .card.allowance{padding:14px 16px}
 .account-dashboard .slot-head{padding:16px 16px 14px}
 .account-dashboard .slot-body{padding:10px 16px 12px}
@@ -1766,9 +1779,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         + '</a></p></div><a class="btn quiet" href="/docs/guide">'
         + label('Setup help', '设置帮助', inline=True) + '</a></div>'
         + _account_nav("/account", monthly=_monthly_management(store, cfg, account),
-                       openrouter=openrouter_on, home_macs=(account["id"] in cfg.home_mac_owners
-                           or "*" in cfg.home_mac_owners)) + banner
-        + _dedicated_entry(account,cfg,held)
+                       openrouter=openrouter_on, home_macs=_home_macs_nav(cfg, account)) + banner
+        + _dedicated_entry(account, cfg, held)
         + trial_routes.entry(cfg)
         + (_wallet_panel(store, account, topup_ready=topup_ready, csrf=csrf, compact=bool(held))
            if wallet_routes.enabled(cfg) else
@@ -1844,14 +1856,49 @@ def _monthly_management(store: Store, cfg: Config, account: Mapping[str, Any]) -
         return False
 
 
-def _dedicated_entry(account,cfg,held):
+def _home_macs_nav(cfg: Config, account: Mapping[str, Any]) -> bool:
+    return bool(
+        not getattr(cfg, "broker_only", False)
+        and cfg.home_mac_owners
+        and (account["id"] in cfg.home_mac_owners or "*" in cfg.home_mac_owners)
+    )
+
+
+def _dedicated_entry(account, cfg, held):
     from .dedicated_slots import link
-    actions=[]
-    if account["id"] in cfg.home_mac_owners or "*" in cfg.home_mac_owners:
-        actions.append(link("/account/machines/add","Add my Mac","添加我的 Mac","btn primary"))
+
+    actions = []
+    can_add = _home_macs_nav(cfg, account)
+    if can_add:
+        actions.append(link("/account/machines/add", "Add my Mac", "添加我的 Mac", "btn primary"))
     if held or actions:
-        actions.append(link("/account/dedicated","Choose a dedicated slot","选择专属槽位"))
-    return '<div class="card">'+' '.join(actions)+'</div>' if actions else ""
+        actions.append(link("/account/dedicated", "Choose a dedicated slot", "选择专属槽位"))
+    if not actions:
+        return ""
+    subtitle = (
+        label(
+            "Connect a personal Mac or open the dedicated slot picker "
+            "to check tunnels and services.",
+            "连接个人 Mac，或打开专属槽位选择器查看隧道与可用服务。",
+            inline=True,
+        )
+        if can_add
+        else label(
+            "Open the dedicated slot picker to switch slots and choose compatible services.",
+            "打开专属槽位选择器，切换槽位并查看兼容的模型服务。",
+            inline=True,
+        )
+    )
+    return (
+        '<section class="card dedicated-entry"><div class="dedicated-entry-copy">'
+        '<p class="dedicated-eyebrow">'
+        + label("Dedicated slots", "专属槽位", inline=True)
+        + '</p><p class="dedicated-sub">'
+        + subtitle
+        + '</p></div><div class="dedicated-entry-actions">'
+        + "".join(actions)
+        + "</div></section>"
+    )
 
 
 def _account_nav(current: str, *, monthly: bool = False, openrouter: bool = False,
@@ -1931,7 +1978,8 @@ def usage_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         if plan:
             subtitle += ' · ' + escape(plan)
         cards.append('<section class="card slot quota-account-card" id="slot-'
-                     + escape(slot['id']) + '"><h2>' + escape(names.display(slot))
+                     + escape(slot['id']) + '"><h2>'
+                     + escape(slot.get('home_name') or names.display(slot))
                      + '</h2><p class="quota-account-identity">' + subtitle + '</p>'
                      + _account_quota(slot, report, now, csrf, heard=(hb or {}).get('ts'),
                                       max_age=cfg.heartbeat_max_age_s, usage_page=True)
@@ -1956,7 +2004,8 @@ def usage_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
             + label('Open Claude usage', '打开 Claude 用量页', inline=True) + '</a></div>'
             + _account_nav('/account/usage', monthly=_monthly_management(store, cfg, account),
                            openrouter=bool(getattr(cfg, "openrouter_models", "")
-                                           and not cfg.broker_only))
+                                           and not cfg.broker_only),
+                           home_macs=_home_macs_nav(cfg, account))
             + banner + '<p><a href="/account/usage" data-fleet-status="account">'
             + label('Refresh page readings', '刷新页面读数', inline=True)
             + '</a></p><div class="quota-overview">' + (''.join(cards) or empty)
@@ -1974,7 +2023,9 @@ def available_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any
             if not slot.get("private_owner") or slot.get("home_mac")
             or account.get("role") == "admin"]
     quota = int(account.get("slot_quota") or 0)
-    counted = sum(1 for slot in held if slot["state"] in slotstates.HELD)
+    counted = sum(
+        1 for slot in held if slot["state"] in slotstates.HELD and not slot.get("home_mac")
+    )
     can_claim = wallet_routes.enabled(cfg) or counted < quota
     monthly = getattr(cfg, "stripe_subscriptions_enabled", False) is True
     note = ('' if can_claim or monthly else '<p class="offer-note">' + label(
@@ -1988,7 +2039,8 @@ def available_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any
             + _account_nav("/account/available",
                            monthly=_monthly_management(store, cfg, account),
                            openrouter=bool(getattr(cfg, "openrouter_models", "")
-                                           and not cfg.broker_only)) + note
+                                           and not cfg.broker_only),
+                           home_macs=_home_macs_nav(cfg, account)) + note
             + offer_ui.browse(store, account, csrf_for(session_id, cfg.cookie_secret), now,
                               cfg.heartbeat_max_age_s, query, can_claim=can_claim,
                               purchase=wallet_routes.enabled(cfg), monthly=monthly))
@@ -2341,9 +2393,9 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "首个正文响应字节和总时长有样本数、"
                 "均值、最大值及观测时间、最近完成时间。输入、"
                 "输出及缓存 Token 总数注明完整响应样本覆盖率；"
-                "缺失或部分 "
+                "缺失或部分"
                 "数据表示未知，不是零或账单。统计不含模型名、请求 "
-                "ID、请求头、正文、路径、邮箱或凭据。七日汇总窗口与 "
+                "ID、请求头、正文、路径、邮箱或凭据。七日汇总窗口与"
                 f"健康快照的保存期限不同；服务器保留这些报告 "
                 f"{_span_zh(cfg.retention_days * 86400)}。"
             ),
@@ -2544,7 +2596,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 (
                     "网关和槽位转发器移除部分请求头及顶层 "
                     "<code>metadata</code> 字段，不会自动删除提示词、"
-                    "工具结果或文件内容中的 "
+                    "工具结果或文件内容中的"
                     "敏感信息。原版提示词可能包含操作系统、"
                     "工作目录和环境信息。网关还能看到连接 IP 和时间；"
                     "这不是匿名服务。"
@@ -2562,7 +2614,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 (
                     "原版历史和设置保留在现有位置。"
                     "设置程序不会自动清除已有文件或保存的历史。"
-                    "断开或撤销电脑访问，不会撤销已写入的 "
+                    "断开或撤销电脑访问，不会撤销已写入的"
                     "内容，也不会删除已经收到或保存到原版历史中的数据。"
                 ),
             ),
@@ -2584,10 +2636,10 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 (
                     "项目偏好是以目录哈希索引的本地私有设置。"
                     "后台任务的提示词、选项、"
-                    "项目路径及有大小限制的输出/错误日志保存在 "
+                    "项目路径及有大小限制的输出/错误日志保存在"
                     "电脑的私有文件中，可能包含敏感内容，直到你主动删除；"
                     "任务列表不展示提示词或路径。doctor/status "
-                    "导出只包含 "
+                    "导出只包含"
                     "允许的健康字段和固定恢复建议，不包含任务日志、"
                     "凭据或项目内容；只写入你指定的本地文件，"
                     "不会自动上传。"
@@ -2721,7 +2773,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "gateway traffic twice. This performance panel "
                 "does not split measurements by user or slot or publish names, emails, "
                 "prompts, credentials or response contents.",
-                "公开的服务状态性能面板汇总当前槽位最新报告中已有的数值统计，展示包括今天在内的 "
+                "公开的服务状态性能面板汇总当前槽位最新报告中已有的数值统计，展示包括今天在内的"
                 "七个 UTC 日的传输完成率和槽位端平均响应时长。流式输出速率在相同窗口内，合并"
                 "符合条件的节点原生／桥接流和 HTTPS 网关观测，不重复计算网关流量。这个性能面板"
                 "不按用户或槽位分别展示统计，"
@@ -2915,7 +2967,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 (
                     "归还槽位会删除其 Linux 账号和所有文件，"
                     "不删除本地文件或 Claude 账号。Fleet 账号存在期间，"
-                    "账号信息和付款记录 "
+                    "账号信息和付款记录"
                     "继续保留。要删除 Fleet 账号，请联系运营方；"
                     "待全部槽位归还并清空后，由运营方手动处理。"
                     "处理方式变化时会更新本页及日期。"

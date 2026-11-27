@@ -185,24 +185,57 @@ def services(store, cfg, account, slot, now, csrf, home):
     rows = []
     for name, ready, reason in entries(store, cfg, account, slot, now, home):
         provider = "anthropic" if name == "Claude" else "devin"
-        actions = (
-            link(f"/account#slot-{sid}-connect-{provider}", "Connect my computer", "连接我的电脑")
-            + create_form(slot, csrf, provider)
+        status_pill = (
+            '<span class="pill ok">' + tr("Ready", "就绪") + "</span>"
             if ready
-            else "<p>" + tr(*reason) + "</p>"
+            else '<span class="pill disabled">' + tr("Unavailable", "暂不可用") + "</span>"
         )
-        rows.append('<section class="ds-service"><h3>' + name + "</h3>" + actions + "</section>")
+        actions = (
+            '<div class="ds-service-detail">'
+            + link(
+                f"/account#slot-{sid}-connect-{provider}",
+                "Connect my computer",
+                "连接我的电脑",
+                "btn primary hm-btn-primary",
+            )
+            + create_form(slot, csrf, provider)
+            + "</div>"
+            if ready
+            else '<div class="ds-service-detail"><p>' + tr(*reason) + "</p></div>"
+        )
+        rows.append(
+            '<section class="ds-service"><div class="ds-service-head"><h3>'
+            + name
+            + "</h3>"
+            + status_pill
+            + "</div>"
+            + actions
+            + "</section>"
+        )
     legacy = slot.get("private_owner") and not slot.get("home_mac")
     if cfg.gateway_ready:
+        gemini_pill = (
+            '<span class="pill assigned">' + tr("Private Mac", "专属 Mac") + "</span>"
+            if legacy
+            else '<span class="pill disabled">' + tr("Unavailable", "暂不可用") + "</span>"
+        )
         gemini = (
             link("/account/gemini", "Open Gemini setup", "打开 Gemini 设置")
             if legacy
-            else tr(
+            else "<p>"
+            + tr(
                 "Gemini subscription requires a private Mac configured for Antigravity.",
                 "Gemini 订阅需要已配置 Antigravity 的专属 Mac。",
             )
+            + "</p>"
         )
-        rows.append('<section class="ds-service"><h3>Gemini</h3>' + gemini + "</section>")
+        rows.append(
+            '<section class="ds-service"><div class="ds-service-head"><h3>Gemini</h3>'
+            + gemini_pill
+            + '</div><div class="ds-service-detail">'
+            + gemini
+            + "</div></section>"
+        )
         grants = set()
         if not slot.get("home_mac") and wallet_access.allowed(store, slot, now=now):
             for key in store.list_gateway_keys(account["id"]):
@@ -214,24 +247,38 @@ def services(store, cfg, account, slot, now, csrf, home):
 
         for provider, alias in ALIASES.items():
             if provider in grants:
+                api_pill = '<span class="pill ok">' + tr("Granted", "已授权") + "</span>"
                 detail = (
-                    tr("Use your granted key and model", "使用已授权的密钥及模型")
+                    "<span>"
+                    + tr("Use your granted key and model", "使用已授权的密钥及模型")
                     + " <code>"
                     + escape(alias)
-                    + "</code> "
+                    + "</code></span>"
                     + link("/account#gateway", "Manage connection keys", "管理连接密钥")
                 )
             elif legacy and provider == "gemini":
+                api_pill = '<span class="pill assigned">' + tr("Configurable", "可配置") + "</span>"
                 detail = link("/account/gemini", "Set up the Gemini API", "设置 Gemini API")
             elif slot.get("home_mac"):
-                detail = tr(
-                    "Choose another slot with this API provider configured.",
-                    "请选择已配置此 API 服务的其他槽位。",
+                api_pill = (
+                    '<span class="pill disabled">' + tr("Unavailable", "暂不可用") + "</span>"
+                )
+                detail = (
+                    "<p>"
+                    + tr(
+                        "Choose another slot with this API provider configured.",
+                        "请选择已配置此 API 服务的其他槽位。",
+                    )
+                    + "</p>"
                 )
             else:
+                api_pill = (
+                    '<span class="pill disabled">' + tr("Requires grant", "需要授权") + "</span>"
+                )
                 detail = (
-                    tr("Requires a provider grant for this slot.", "需要为此槽位授权。")
-                    + " "
+                    "<span>"
+                    + tr("Requires a provider grant for this slot.", "需要为此槽位授权。")
+                    + "</span>"
                     + link(
                         "/docs/library/docs/public-gateway.html#api-model-picker",
                         "API model setup",
@@ -239,10 +286,11 @@ def services(store, cfg, account, slot, now, csrf, home):
                     )
                 )
             rows.append(
-                '<section class="ds-service"><h3>'
+                '<section class="ds-service"><div class="ds-service-head"><h3>'
                 + LABELS[provider]
                 + " API</h3>"
-                + "<div>"
+                + api_pill
+                + '</div><div class="ds-service-detail">'
                 + detail
                 + "</div></section>"
             )
@@ -258,35 +306,67 @@ def page(store, cfg, account, session, now, identifier="", error=None):
         raise home_macs.denied()
     viewer = usersite.viewer_for(account, session, cfg, store)
     can_add = account["id"] in cfg.home_mac_owners or "*" in cfg.home_mac_owners
-    add = link(home_macs.ADD, "Add my Mac", "添加我的 Mac", "btn primary") if can_add else ""
+    add = (
+        link(home_macs.ADD, "Add my Mac", "添加我的 Mac", "btn primary hm-btn-primary")
+        if can_add
+        else ""
+    )
+    lead = tr(
+        "Select a personal Mac or hosted slot to verify its connection "
+        "and choose a compatible service.",
+        "选择一台个人 Mac 或托管槽位，核对连接状态并选择兼容的模型服务。",
+    )
     contents = (
-        '<div class="hm-page"><header class="hm-head ds-head"><h1>'
+        '<div class="hm-page"><a class="hm-back" href="/account">'
+        '<span aria-hidden="true">←</span>'
+        + tr("Back to account", "返回账户")
+        + '</a><header class="hm-head ds-head"><div class="hm-head-copy">'
+        '<p class="hm-eyebrow">'
+        + tr("Slot picker", "槽位选择器")
+        + "</p><h1>"
         + tr("Dedicated slots", "专属槽位")
-        + "</h1>"
+        + f'</h1><p class="hm-lead">{lead}</p></div>'
         + add
         + "</header>"
     )
     if error:
-        contents += '<p role="alert">' + tr(*error) + "</p>"
+        contents += '<p class="hm-alert" role="alert">' + tr(*error) + "</p>"
     if held:
         contents += chooser(held, identifier)
     else:
         contents += (
-            "<p>"
+            '<section class="hm-card"><p class="hm-copy">'
             + tr(
                 "Add your Mac or claim a hosted slot to get started.",
                 "添加你的 Mac 或领取托管槽位即可开始。",
             )
-            + "</p>"
+            + '</p><div class="hm-actions">'
+            + link(
+                "/account/available",
+                "Browse hosted slots",
+                "浏览托管槽位",
+                "btn primary hm-btn-primary",
+            )
+            + "</div></section>"
         )
-        contents += link("/account/available", "Browse hosted slots", "浏览托管槽位")
     if current:
         home = (
             home_macs.for_slot(store, account["id"], identifier, now)
             if current.get("home_mac")
             else None
         )
-        contents += "<h2>" + escape(display(current)) + "</h2>"
+        kind_badge = (
+            '<span class="pill assigned">' + tr("Personal Mac", "个人 Mac") + "</span>"
+            if current.get("home_mac")
+            else '<span class="pill assigned">' + tr("Hosted slot", "托管槽位") + "</span>"
+        )
+        contents += (
+            '<div class="ds-slot-banner"><h2>'
+            + escape(display(current))
+            + "</h2>"
+            + kind_badge
+            + "</div>"
+        )
         if home:
             contents += home_mac_ui.connection(home, viewer.csrf)
         contents += (
@@ -302,15 +382,18 @@ def page(store, cfg, account, session, now, identifier="", error=None):
         account_links.append(link("/account/devin-trial", "Devin trial", "Devin 试用"))
     if account_links:
         contents += (
-            "<section><h2>"
+            '<section class="hm-card"><h2>'
             + tr("Account services", "账户服务")
-            + "</h2>"
+            + '</h2><p class="hm-copy">'
+            + tr(
+                "These account-level routes do not require selecting a dedicated slot.",
+                "以下账户级服务无需绑定单个专属槽位。",
+            )
+            + '</p><div class="hm-actions">'
             + "".join(account_links)
-            + "</section>"
+            + "</div></section>"
         )
-    contents += (
-        link("/account", "Back to account", "返回账户") + "</div>" + home_mac_ui.script_tag()
-    )
+    contents += "</div>" + home_mac_ui.script_tag()
     return usersite._shell(
         "Dedicated slots",
         contents,

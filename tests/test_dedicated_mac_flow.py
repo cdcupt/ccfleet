@@ -251,3 +251,37 @@ def test_other_slot_provider_and_account_services_keep_their_routing(
     store.grant_api_model(key["id"], "s8", {**reservation, "credential_fp": "f" * 64})
     page = dedicated_slots.page(store, config, account, "session", now, "s8")
     assert "<code>fleet-gpt</code>" in page and "<code>fleet-gpt</code>" not in home
+
+
+def test_personal_mac_polish_nav_allowance_and_confirm_step(slot_service, tmp_path, monkeypatch):
+    from ccfleetd import home_mac_ui, usersite
+
+    store, cfg, request, _, _ = slot_service
+    _, sid = enroll(slot_service, tmp_path / "mac", monkeypatch, "Studio Mac")
+    store.set_slot_quota("alice", 1)
+    # Personal Mac does not consume hosted slot allowance on /account/available.
+    avail = request("/account/available", "alice")[1]
+    assert "You have no unused slot allowance" not in avail
+    assert 'href="/account/machines"' in avail
+    # Usage page shows the owner-chosen Mac name and keeps My machines navigation.
+    usage = request("/account/usage", "alice")[1]
+    assert "Studio Mac" in usage
+    assert 'href="/account/machines"' in usage
+    # My machines keeps the unified account tab strip with aria-current="page".
+    machines_html = request(home_macs.PAGE, "alice")[1]
+    assert 'class="account-nav"' in machines_html
+    assert 'href="/account/machines" aria-current="page"' in machines_html
+    assert 'class="hm-back"' not in machines_html
+    # Add-Mac stays focused with a breadcrumb back to My machines.
+    add_html = request(home_macs.ADD, "alice")[1]
+    assert 'class="account-nav"' not in add_html
+    assert 'class="hm-back" href="/account/machines"' in add_html
+    # Confirm view omits step 1 and does not render a stray numbered step badge.
+    account = store.get_account("alice")
+    viewer = usersite.viewer_for(account, "sess1", cfg, store)
+    confirm_html = home_mac_ui.enrollment(
+        viewer, [], confirm=True, error=("Check the code.", "请核对连接码。")
+    )
+    assert '<span class="hm-step-num"' not in confirm_html
+    assert 'class="hm-alert"' in confirm_html
+    assert "<title>CC Fleet · Approve this Mac</title>" in confirm_html

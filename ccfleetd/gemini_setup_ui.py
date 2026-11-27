@@ -483,9 +483,13 @@ def workspace_panel(csrf, ready, pairing, slot_id):
             + tr("Install CCFleet on a new Mac", "在新 Mac 上安装 CCFleet") + '</a></p>'
             + t3_setup()
             + bi('<p>If T3 is already configured, open your project and choose CCFleet Gemini. '
-                 'For a terminal chat, run <code>ccfleet gemini</code>.</p>',
+                 'For the native terminal, run <code>ccfleet gemini</code> (add '
+                 '<code>--review</code> to approve local tool calls for that session, or '
+                 '<code>--editor</code> for the workspace-session flow).</p>',
                  '<p>如果 T3 已配置，打开项目并选择 CCFleet Gemini 即可。'
-                 '若要在终端中对话，可运行 <code>ccfleet gemini</code>。</p>')
+                 '若要使用原生终端，可运行 <code>ccfleet gemini</code>（加 <code>--review</code> '
+                 '可逐次审批本次会话的本地工具，加 <code>--editor</code> '
+                 '可切回工作区会话模式）。</p>')
             + pending + pairing_help()
             + workspace_devices(csrf, slot_id, pairing)
             + '<details class="gm-disconnect"><summary>'

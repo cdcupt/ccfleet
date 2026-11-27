@@ -14,7 +14,7 @@ from typing import Any, Optional
 
 from . import sessions, usersite, wallet, wallet_routes
 from .bilingual import bi, label
-from .openrouter import PAGE
+from .openrouter import IMAGE_CONTEXT, PAGE
 
 REQUEST_ID_RE = re.compile(r"[A-Za-z0-9_-]{16,64}\Z")
 
@@ -446,13 +446,15 @@ def entry(cfg: Any, account: Optional[Mapping[str, Any]], store: Any) -> str:
             "key—no slot or Claude subscription required. CLI 0.2.26 verifies and saves your "
             "key privately once per computer, launches your last used model, puts 10 recent "
             "models first in /model, and sets the verified 1,048,576-token context window for "
-            "the Flash/Pro catalog. Starting in CLI 0.2.27, fresh sessions default to "
-            "bypassPermissions (use --permission-mode auto for auto mode).",
+            "the Flash/Pro catalog. CLI 0.2.27 defaults fresh sessions to bypassPermissions "
+            "(use --permission-mode auto for auto mode), and CLI 0.2.30+ runs text-only by "
+            "default with ccfleet openrouter-images for image-capable models.",
             "使用个人 Fleet 密钥在本机直接调用可选 OpenRouter 模型，无需槽位或 Claude 订阅。"
             "CLI 0.2.26 会在每台电脑验证并私有保存密钥一次，启动时沿用上次使用的模型，"
             "在 /model 中优先显示最近使用的 10 个模型，并为 Flash/Pro 目录自动配置经验证的 "
-            "1,048,576 token 上下文窗口。自 CLI 0.2.27 起，新建会话默认使用 "
-            "bypassPermissions（如需 auto 模式请加 --permission-mode auto）。",
+            "1,048,576 token 上下文窗口。CLI 0.2.27 起新建会话默认使用 bypassPermissions"
+            "（加 --permission-mode auto 可切换 auto 模式）；CLI 0.2.30+ 默认纯文本会话，"
+            "支持图片的模型可用 ccfleet openrouter-images 启用图片输入。",
             inline=True,
         )
         + '</p><div class="or-entry-actions">'
@@ -517,6 +519,12 @@ def _model_rows(ordered_models: list[str], recent_set: set[str],
             tags += (
                 '<span class="or-tag recent">'
                 + label("Recent", "最近使用", inline=True)
+                + "</span>"
+            )
+        if slug in IMAGE_CONTEXT:
+            tags += (
+                '<span class="or-tag">'
+                + label("Images", "支持图片", inline=True)
                 + "</span>"
             )
         if prompt == 0 and completion == 0:
@@ -1003,6 +1011,7 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
         PAGE,
         monthly=usersite._monthly_management(service.store, cfg, account),
         openrouter=True,
+        home_macs=usersite._home_macs_nav(cfg, account),
     )
 
     # One-time credential reveal banner (key appears EXACTLY ONCE in the HTML body).
@@ -1125,7 +1134,7 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
         + f"</div>{key_hint}{local_vs_revoke}</section>"
     )
 
-    # CLI 0.2.26 / 0.2.27 Quick Start card
+    # CLI 0.2.26 / 0.2.27 / 0.2.30+ Quick Start card
     flash_pro_window = set(service.models) <= {
         "deepseek/deepseek-v4.1-flash",
         "deepseek/deepseek-v4-pro",
@@ -1134,7 +1143,7 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
         '<section class="or-card" id="openrouter-cli">'
         '<div class="or-card-head"><h2>'
         + label("Run in local Claude Code", "在本机 Claude Code 中运行", inline=True)
-        + '</h2><span class="or-tag">CLI 0.2.26 / 0.2.27</span></div>'
+        + '</h2><span class="or-tag">CLI 0.2.26–0.2.30+</span></div>'
         '<p class="or-card-sub">'
         + bi(
             "No slot or Claude subscription needed. Enter your personal Fleet key once per "
@@ -1149,8 +1158,8 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
         + '</p><ol class="or-steps">'
         '<li class="or-step"><h3>'
         + label(
-            "Update to signed stable CLI 0.2.26+ (0.2.27 for bypass default)",
-            "升级至签名稳定版 CLI 0.2.26+（0.2.27 起默认 bypass 模式）",
+            "Update to the signed stable CLI",
+            "升级至签名稳定版 CLI",
             inline=True,
         )
         + "</h3>"
@@ -1160,10 +1169,14 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
             "CLI <code>0.2.26</code> added per-computer saved credentials (owner-only file) "
             "and the verified 1,048,576-token context window for the Flash/Pro catalog. "
             "CLI <code>0.2.27</code> sets fresh local OpenRouter sessions to native "
-            "<code>bypassPermissions</code> mode by default.",
+            "<code>bypassPermissions</code> mode by default. CLI <code>0.2.30</code>+ "
+            "defaults <code>ccfleet openrouter</code> to text-only sessions and adds "
+            "<code>ccfleet openrouter-images</code> for image-capable models.",
             "CLI <code>0.2.26</code> 新增每台电脑私有保存密钥及 Flash/Pro 目录经验证的 "
             "1,048,576 token 上下文窗口；CLI <code>0.2.27</code> 起，新建本地 OpenRouter "
-            "会话默认以原生 <code>bypassPermissions</code> 模式启动。",
+            "会话默认以原生 <code>bypassPermissions</code> 模式启动；CLI <code>0.2.30</code>+ "
+            "默认以纯文本模式启动 <code>ccfleet openrouter</code>，并新增 "
+            "<code>ccfleet openrouter-images</code> 供支持图片的模型使用。",
             inline=True,
         )
         + "</p>"
@@ -1174,7 +1187,11 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
             inline=True,
         )
         + "</h3>"
-        + _code_box("Terminal · Launch", "终端 · 启动", "ccfleet openrouter")
+        + _code_box(
+            "Terminal · Launch (text-only default)",
+            "终端 · 启动（默认纯文本）",
+            "ccfleet openrouter",
+        )
         + "<p>"
         + bi(
             "On first run, paste your personal Fleet key at the hidden prompt. Fleet verifies "
@@ -1203,7 +1220,12 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
             f"by default—local edits and shell commands can run without approval prompts, "
             f"while native managed policy still applies. Run "
             f"<code>ccfleet openrouter --permission-mode auto</code> for a session using "
-            f"auto mode.</p>",
+            f"auto mode.</p>"
+            f"<p><strong>Text default &amp; image sessions (CLI 0.2.30+):</strong> "
+            f"<code>ccfleet openrouter</code> runs text-only by default (skipping image and "
+            f"PDF reads). Use <code>ccfleet openrouter-images</code> to enable inline PNG, "
+            f"JPEG, GIF or WebP images for one session on image-capable models; omitted "
+            f"attachments keep conversation history intact.</p>",
             f"<p><strong>模型记忆与 1M 上下文（CLI 0.2.26+）：</strong>"
             f"<code>ccfleet openrouter</code> 默认启动你<strong>上次使用的模型</strong>"
             f"（下次默认：<code>{escape(default_model)}</code>），<code>/model</code> "
@@ -1213,16 +1235,26 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
             f"<p><strong>默认权限模式（CLI 0.2.27+）：</strong>新建本地 "
             f"OpenRouter 会话默认以原生 <code>bypassPermissions</code> 模式启动——本地文件编辑"
             f"与 shell 命令可无需逐次批准直接执行，同时原生托管策略依然生效。如需使用 auto "
-            f"模式，请运行 <code>ccfleet openrouter --permission-mode auto</code>。</p>",
+            f"模式，请运行 <code>ccfleet openrouter --permission-mode auto</code>。</p>"
+            f"<p><strong>默认纯文本与图片会话（CLI 0.2.30+）：</strong>"
+            f"<code>ccfleet openrouter</code> 默认以纯文本模式运行（跳过图片与 PDF 读取）。"
+            f"在支持图片的模型上使用 <code>ccfleet openrouter-images</code> 可为单次会话启用 "
+            f"PNG、JPEG、GIF 或 WebP 内联图片输入；未启用的附件会被替换为文本提示，"
+            f"保持对话历史完整。</p>",
         )
         + "</div>"
         + '</li><li class="or-step"><h3>'
         + label(
-            "Check catalog, switch modes, pick a model, or forget the local key",
-            "查看目录、选择 auto 模式、指定模型或清除本地密钥",
+            "Enable images, check catalog, switch modes, pick a model, or forget the local key",
+            "启用图片、查看目录、选择 auto 模式、指定模型或清除本地密钥",
             inline=True,
         )
         + "</h3>"
+        + _code_box(
+            "Terminal · Enable images for one session (CLI 0.2.30+)",
+            "终端 · 单次会话启用图片输入（CLI 0.2.30+）",
+            "ccfleet openrouter-images",
+        )
         + _code_box(
             "Terminal · Check catalog & pricing (reuses saved key, no inference)",
             "终端 · 查看模型与计费（复用本地密钥，不产生费用）",
@@ -1248,11 +1280,13 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
             "<code>--forget-key</code> removes only the saved local file on this computer; "
             "use <strong>Revoke access</strong> above to invalidate the key on Fleet. "
             "Use <code>ccfleet claude</code> for your private Claude subscription slots. "
-            "OpenRouter supports text and local Claude Code tools; choose models with "
-            "tool-calling support.",
+            "OpenRouter supports text, local Claude Code tools, and (with "
+            "<code>ccfleet openrouter-images</code> on marked models) inline images; choose "
+            "models with tool-calling support.",
             "<code>--forget-key</code> 仅删除本机保存的密钥文件；如需在 Fleet 服务端立即作废，"
             "请使用上方的<strong>撤销密钥</strong>。自有 Claude 订阅槽位请继续使用 "
-            "<code>ccfleet claude</code>。OpenRouter 支持文本与本地 Claude Code 工具，"
+            "<code>ccfleet claude</code>。OpenRouter 支持文本、本地 Claude Code 工具，"
+            "并在标注支持图片的模型上通过 <code>ccfleet openrouter-images</code> 支持内联图片；"
             "请选择兼容工具调用的模型。",
             inline=True,
         )
@@ -1620,6 +1654,19 @@ def page(service: Any, cfg: Any, account: Optional[Mapping[str, Any]],
             "<strong>权限审批提示（CLI 0.2.27+）：</strong>新建 OpenRouter 会话默认使用原生 "
             "<code>bypassPermissions</code> 模式（原生托管策略仍生效）。如需在会话中使用 "
             "auto 模式，请运行 <code>ccfleet openrouter --permission-mode auto</code>。",
+            inline=True,
+        )
+        + "</p><p>"
+        + bi(
+            "<strong>Image input omitted or rejected (CLI 0.2.30+):</strong> "
+            "<code>ccfleet openrouter</code> runs text-only and replaces pasted or historical "
+            "images with a text placeholder so your conversation stays usable. Run "
+            "<code>ccfleet openrouter-images</code> with an image-enabled model to send "
+            "inline PNG, JPEG, GIF or WebP images for that session.",
+            "<strong>图片输入被省略或拒绝（CLI 0.2.30+）：</strong>"
+            "<code>ccfleet openrouter</code> 默认以纯文本运行，会将粘贴或历史中的图片替换为"
+            "文本占位符，保持对话可继续。如需发送内联 PNG、JPEG、GIF 或 WebP 图片，"
+            "请配合支持图片的模型运行 <code>ccfleet openrouter-images</code>。",
             inline=True,
         )
         + "</p><p>"

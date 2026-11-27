@@ -211,3 +211,29 @@ def test_language_access_logs_keep_fixed_templates():
     assert access_log_route("/zh/account/slots/secret-slot/cli-revoke") == (
         "/account/slots/{slot_id}/cli-revoke")
     assert access_log_route("/zh/private-customer-value") == "unknown_route"
+
+
+def test_zh_projection_preserves_svg_titles_and_avoids_duplicate_brand_suffix():
+    from ccfleetd import bilingual, customer_docs
+    from ccfleetd.config import Config
+
+    how_zh = bilingual.project_html(
+        customer_docs.how_it_works(Config()), "zh", "/docs/how-it-works"
+    )
+    assert "<title>工作原理 · CC Fleet</title>" in how_zh
+    assert '<title id="provider-zh-title">同一个客户端，自选模型服务</title>' in how_zh
+
+    sample = (
+        '<!doctype html><html lang="en"><head>'
+        '<title data-title-zh="每日 Devin 试用怎样工作 · CC Fleet">How it works</title>'
+        "</head><body></body></html>"
+    )
+    projected = bilingual.project_html(sample, "zh", "/docs/library/docs/devin-trial-foundation.html")
+    assert "<title>每日 Devin 试用怎样工作 · CC Fleet</title>" in projected
+    assert "CC Fleet · CC Fleet" not in projected
+
+    missing_titles = [
+        p for p in bilingual.CURRENT_PAGES
+        if p.rstrip("/") not in bilingual.TITLES_ZH and p not in bilingual.TITLES_ZH
+    ]
+    assert missing_titles == []

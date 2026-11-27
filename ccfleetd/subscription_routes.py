@@ -33,23 +33,23 @@ def failure(status: int = 503, code: str = "unconfirmed"):
         message = label(
             "You already have a monthly checkout in progress. Continue or cancel it "
             "in Monthly payments before choosing another slot.",
-            "你已有一笔进行中的月租结账。请先在「月租付款」中继续或取消，再选择其他槽位。",
+            "你已有一笔进行中的月付结账。请先在“月付管理”中继续或取消，再选择其他槽位。",
             inline=True,
         )
-        target, title = "/account/subscriptions", label("Monthly payments", "月租付款", inline=True)
+        target, title = "/account/subscriptions", label("Monthly payments", "月付管理", inline=True)
     elif code == "processing-required":
         message = label(
             "This checkout still needs payment confirmation. Check Monthly payments. "
             "If it stays pending, ask Fleet to check this checkout; do not start a replacement.",
-            "这笔结账仍需确认付款状态，请查看「月租付款」。"
+            "这笔结账仍需确认付款状态，请查看“月付管理”。"
             "如果持续待处理，请让 Fleet 核查这笔结账，不要另开一笔。",
             inline=True,
         )
-        target, title = "/account/subscriptions", label("Monthly payments", "月租付款", inline=True)
+        target, title = "/account/subscriptions", label("Monthly payments", "月付管理", inline=True)
     elif code == "quote-changed":
         message = label(
             "The price changed. Review the current monthly price before you continue.",
-            "价格已更新，请先确认当前月租价格，再继续。",
+            "价格已更新，请先确认当前月付价格，再继续。",
             inline=True,
         )
         target, title = "/account/available", label("Choose a slot", "选择槽位", inline=True)
@@ -57,13 +57,13 @@ def failure(status: int = 503, code: str = "unconfirmed"):
         message = label(
             "This monthly rental could not be confirmed. Return to your slots "
             "and retry the same request. No existing slot was enrolled automatically.",
-            "暂时无法确认月租，请返回我的槽位，重试同一次请求。已有槽位不会自动开通月租。",
+            "暂时无法确认月付，请返回我的槽位，重试同一次请求。已有槽位不会自动开通月付。",
             inline=True,
         )
         target, title = "/account", label("Your slots", "我的槽位", inline=True)
     body = (
         '<section class="card"><h1>'
-        + label("Review monthly rental", "确认月租", inline=True)
+        + label("Review monthly rental", "确认月付", inline=True)
         + "</h1><p>"
         + message
         + '</p><a href="'
@@ -101,7 +101,15 @@ def page(
                     row["cancel_idempotency_key"] = wallet_routes.nonce()
                 if row.get("status") != "closed" and not row.get("claim_id"):
                     row["checkout_idempotency_key"] = wallet_routes.nonce()
-            body = subscription_ui.summary(rows, csrf=csrf, management_ready=managing(billing, cfg))
+            nav = usersite._account_nav(
+                "/account/subscriptions",
+                monthly=True,
+                openrouter=bool(getattr(cfg, "openrouter_models", "") and not cfg.broker_only),
+                home_macs=usersite._home_macs_nav(cfg, account),
+            )
+            body = subscription_ui.summary(
+                rows, csrf=csrf, management_ready=managing(billing, cfg), navigation=nav
+            )
         else:
             if set(query) != {"machine_number"}:
                 return failure(400)
@@ -118,7 +126,11 @@ def page(
         return usersite.Outcome(
             200,
             body=usersite._shell(
-                "Monthly rentals", body, extra_css=subscription_ui.CSS, viewer=viewer
+                "Monthly rentals",
+                body,
+                extra_css=subscription_ui.CSS,
+                viewer=viewer,
+                width="wide" if path == "/account/subscriptions" else "narrow",
             ),
         )
     except Exception:

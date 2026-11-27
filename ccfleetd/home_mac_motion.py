@@ -17,30 +17,65 @@ STATES = {
     "retry": ("Tunnel needs a new check", "请重新检测隧道"),
 }
 CSS = """
-.ds-head.hm-head{flex-direction:row;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.ds-head.hm-head{flex-direction:row;align-items:flex-end;justify-content:space-between;flex-wrap:wrap}
 .hm-route[data-state=checking] form{display:none}
-.ds-picker,.ds-service{display:flex;flex-wrap:wrap;align-items:center;gap:.8rem}
-.ds-picker select{max-width:100%;min-height:44px;padding:0 .6rem;font:inherit}
-.ds-service{border-top:1px solid var(--rule);padding:1rem 0}
-.ds-service h3,.ds-service p,.ds-service form{margin:0}.ds-service h3{margin-right:auto}
-.hm-route{border:1px solid var(--rule);border-radius:10px;padding:1.1rem 1.3rem}
-.hm-route .hm-track{display:flex;align-items:center;gap:.6rem;color:var(--muted)}
+.ds-picker{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:18px 22px;
+background:var(--panel);border:1px solid var(--rule);border-radius:var(--radius);
+box-shadow:var(--shadow-sm)}
+.ds-picker label{font-size:14px;font-weight:620;color:var(--ink)}
+.ds-picker select{flex:1 1 220px;max-width:100%;min-height:44px;padding:8px 12px;
+border:1px solid var(--rule);border-radius:10px;background:var(--panel);color:var(--ink);
+font:inherit;font-size:14.5px;transition:border-color .15s var(--ease),box-shadow .15s var(--ease)}
+.ds-picker select:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-soft);outline:none}
+.ds-slot-banner{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin:4px 0 -6px}
+.ds-slot-banner h2{margin:0;font-family:var(--serif);font-size:26px;font-weight:500;
+letter-spacing:-.02em;line-height:1.2;color:var(--ink);overflow-wrap:anywhere}
+.ds-service{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;
+gap:12px 16px;border-top:1px solid var(--rule-soft);padding:16px 0}
+.ds-service:first-of-type{border-top:0;padding-top:4px}
+.ds-service:last-of-type{padding-bottom:2px}
+.ds-service-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;min-width:0}
+.ds-service h3,.ds-service p,.ds-service form{margin:0}
+.ds-service h3{font-size:15.5px;font-weight:640;color:var(--ink)}
+.ds-service-detail{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;
+font-size:13.5px;line-height:1.55;color:var(--muted)}
+.ds-service-detail code{background:var(--inset);padding:2px 6px;border-radius:5px;
+border:1px solid var(--rule-soft);color:var(--ink);font-size:12.5px}
+.hm-route{background:var(--panel);border:1px solid var(--rule);border-radius:var(--radius);
+box-shadow:var(--shadow);padding:20px 24px;display:flex;flex-direction:column;gap:12px;
+animation:cf-rise .44s var(--ease) both}
+.hm-route .hm-track{display:inline-flex;align-items:center;gap:10px;color:var(--muted);
+font-size:13px;font-weight:600}
 .hm-route .hm-mac-icon{display:inline-block;width:24px;height:13px;border:1.5px solid;
 border-radius:4px;position:relative}
 .hm-mac-icon:after{content:"";position:absolute;width:3px;height:3px;border-radius:50%;
 background:currentColor;bottom:2px;right:3px}
 .hm-fleet-icon{display:inline-block;width:18px;height:16px;border:1.5px solid;border-radius:3px;
 background:repeating-linear-gradient(0deg,transparent 0 4px,currentColor 4px 5px)}
-.hm-route .hm-line{height:2px;width:clamp(60px,18vw,145px);background:var(--rule);
-position:relative}.hm-line:after{display:none;content:"";width:7px;height:7px;
-border-radius:50%;background:var(--acc);position:absolute;top:-2.5px}
+.hm-route .hm-line{height:2px;width:clamp(64px,18vw,150px);background:var(--rule);
+border-radius:2px;position:relative;transition:background-color .25s var(--ease)}
+.hm-line:after{display:none;content:"";width:8px;height:8px;border-radius:50%;
+background:var(--acc);position:absolute;top:-3px}
 .hm-route[data-state=checking] .hm-line:after{display:block;
 animation:hm-transfer 1.3s ease-in-out infinite}
-.hm-route[data-state=connected] .hm-line{background:var(--acc)}
-@keyframes hm-transfer{from{left:0}to{left:calc(100% - 7px)}}
-@media(prefers-reduced-motion:reduce){.hm-route[data-state=checking] .hm-line:after{
-animation:none;left:50%}}
-.hm-route [role=status]{font-weight:600;margin:.7rem 0}
+.hm-route[data-state=connected] .hm-line{background:var(--ok)}
+.hm-route[data-state=connected] .hm-track{color:var(--ok)}
+.hm-route[data-state=waiting] .hm-line,
+.hm-route[data-state=retry] .hm-line{background:var(--warn-line)}
+@keyframes hm-transfer{from{left:0}to{left:calc(100% - 8px)}}
+@media(prefers-reduced-motion:reduce){.hm-route{animation:none!important}
+.hm-route[data-state=checking] .hm-line:after{animation:none;left:50%}}
+.hm-route [role=status]{font-weight:620;font-size:14.5px;margin:0;color:var(--ink)}
+.hm-route[data-state=connected] [role=status]{color:var(--ok)}
+.hm-route[data-state=waiting] [role=status],
+.hm-route[data-state=retry] [role=status]{color:var(--warn)}
+.hm-route[data-state=offline] [role=status],
+.hm-route[data-state=unavailable] [role=status]{color:var(--muted)}
+.hm-route form{margin:0}
+@media(max-width:640px){.ds-picker{padding:16px}
+.ds-picker select,.ds-picker .btn{width:100%}
+.ds-service{flex-direction:column;align-items:flex-start}
+.ds-service-detail .btn,.ds-service-detail form,.ds-service-detail form .btn{width:100%}}
 """
 SCRIPT = """(() => {
   const field=document.querySelector('[data-hm-code]');

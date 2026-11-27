@@ -87,7 +87,23 @@ def render(handler, ctx, account, session, status=200, error=None, *, add=False,
 
     viewer = usersite.viewer_for(account, session, ctx.cfg, ctx.store) if account else None
     machines = home_macs.list_for_owner(ctx.store, account["id"], time.time()) if account else []
-    send_page(handler, status, enrollment(viewer, machines, confirm=confirm, add=add, error=error))
+    navigation = (
+        usersite._account_nav(
+            home_macs.PAGE,
+            monthly=usersite._monthly_management(ctx.store, ctx.cfg, account),
+            openrouter=bool(getattr(ctx.cfg, "openrouter_models", "") and not ctx.cfg.broker_only),
+            home_macs=True,
+        )
+        if account and not add and not confirm
+        else ""
+    )
+    send_page(
+        handler,
+        status,
+        enrollment(
+            viewer, machines, confirm=confirm, add=add, error=error, navigation=navigation
+        ),
+    )
 
 
 def get(handler, ctx, path):
