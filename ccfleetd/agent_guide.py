@@ -406,12 +406,16 @@ def section() -> str:
              '启动器检查已通过，三款应用的完整会话尚未逐一验证。</p>')
         + bi('<p><strong>Gemini on CCFleet.</strong> On a paired Mac, '
              '<a href="#t3-gemini">open your local project in T3 Code</a> or run '
-             '<code>ccfleet gemini</code> in the project directory for a terminal chat. '
+             '<code>ccfleet gemini</code> in the project directory for the native terminal '
+             '(full local tool access by default since CLI 0.2.31; add <code>--review</code> '
+             'for per-session approvals or <code>--editor</code> for the workspace-session flow). '
              'Both use the Antigravity subscription on your private Mac slot.</p>',
              '<p><strong>通过 CCFleet 使用 Gemini。</strong>在已配对的 Mac 上，'
              '<a href="#t3-gemini">用 T3 Code 打开本地项目</a>，或在项目目录运行 '
-             '<code>ccfleet gemini</code> 开始终端对话。两种方式都使用专属 Mac 槽位上的 '
-             'Antigravity 订阅。</p>')
+             '<code>ccfleet gemini</code> 启动原生终端（自 CLI 0.2.31 起默认开启本地工具完全访问；'
+             '加 <code>--review</code> 可逐次审批本次会话的本地工具，'
+             '加 <code>--editor</code> 可切回'
+             '工作区会话模式）。两种方式都使用专属 Mac 槽位上的 Antigravity 订阅。</p>')
         + bi('<p>The table also lists sign-in options that tool publishers document for their '
              'own agents. Those entries identify where the agent runs and which plan it uses. '
              'Publisher documentation checked November 21, 2026.</p>',

@@ -256,11 +256,16 @@ def topup_page(balance_cents: int, *, topup_ready: bool, csrf: str = "",
                     "Adding credit does not buy or renew a slot automatically.",
                     "付款确认后，余额会添加到你的 Fleet 账户。充值不会自动购买或续费槽位。",
                     inline=True) + '</p><p>'
-            + label("Fleet credit pays for our slot rentals only. It cannot be transferred "
+            + label("Fleet credit pays for Fleet services (hosted slots and, where enabled, "
+                    "OpenRouter usage). It cannot be transferred "
                     "or withdrawn. Claude and Devin subscriptions are separate. "
                     "Alipay is not available.",
-                    "Fleet 余额仅用于支付槽位租金，不能转让或提现。Claude 和 Devin 订阅需要另付。"
-                    "暂不支持支付宝。", inline=True) + '</p></div></section>')
+                    "Fleet 余额用于支付 Fleet 服务（托管槽位以及已启用时的 OpenRouter 用量），"
+                    "不能转让或提现。Claude 和 Devin 订阅需要另付。暂不支持支付宝。",
+                    inline=True,
+                )
+            + '</p></div></section>'
+    )
 
 
 def owner_ledger(entries: Sequence[Mapping[str, Any]], *, limit: int = 8) -> str:

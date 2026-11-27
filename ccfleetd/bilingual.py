@@ -58,8 +58,14 @@ TITLES_ZH = {'/': 'CC Fleet', '/docs': 'CC Fleet', '/slots': '槽位与价格', 
              '/account/devin-trial': 'Devin 试用',
              '/account/devin-trial/create': 'Devin 试用',
              '/account/devin-trial/revoke': 'Devin 试用',
-             '/account/machines': '我的设备', '/account/machines/approve': '我的设备',
+             '/account/machines': '我的设备', '/account/machines/add': '添加我的 Mac',
+             '/account/machines/confirm': '批准此 Mac',
+             '/account/machines/approve': '我的设备',
+             '/account/machines/add-to-pool': '专属槽位',
+             '/account/machines/probe': '专属槽位',
              '/account/machines/remove': '我的设备',
+             '/account/dedicated': '专属槽位',
+             '/account/dedicated/connect': '连接密钥',
              '/account/openrouter': 'OpenRouter 模型与用量',
              '/account/openrouter/create': 'OpenRouter 模型与用量',
              '/account/openrouter/revoke': 'OpenRouter 模型与用量',
@@ -68,8 +74,8 @@ TITLES_ZH = {'/': 'CC Fleet', '/docs': 'CC Fleet', '/slots': '槽位与价格', 
              '/account/gemini/finish': 'Gemini API 连接',
              '/account/gemini/workspace': 'Gemini 配对',
              '/account/gemini/disconnect': 'Gemini API 连接',
-             '/account/subscribe': '确认月租',
-             '/account/subscriptions': '月租管理',
+             '/account/subscribe': '确认月付',
+             '/account/subscriptions': '月付管理',
              '/privacy': '隐私说明', '/status': '服务状态', '/docs/guide': '使用指南',
              '/docs/how-it-works': '工作原理', '/docs/terms': '服务条款',
              '/docs/library': '文档', '/docs/library/': '文档',
@@ -295,13 +301,15 @@ class _Projection(HTMLParser):
         override = None
         if 'data-copy-' + self.language in attrs:
             override = attrs['data-copy-' + self.language]
-        if tag == 'title' and self.language == 'zh':
+        if (tag == 'title' and self.language == 'zh'
+                and not any(frame[0] == 'svg' for frame in self.frames)):
             path = urlsplit(self.target).path.rstrip('/') or '/'
             words = attrs.get('data-title-zh') or TITLES_ZH.get(path)
             if _form(path) and '/slots/' in path:
                 words = '连接电脑' if path.endswith('/cli') else '我的槽位'
             if words:
-                override = words + ' · CC Fleet' if words != 'CC Fleet' else words
+                override = (words if words == 'CC Fleet' or words.endswith(' · CC Fleet')
+                            else words + ' · CC Fleet')
         if not hidden:
             if tag == 'html':
                 attrs['lang'] = 'zh-Hans' if self.language == 'zh' else 'en'
@@ -357,6 +365,8 @@ class _Projection(HTMLParser):
                     if attribute in attrs:
                         attrs[attribute] = self._ui_url(attrs[attribute])
             for attribute in ('placeholder', 'aria-label', 'title', 'data-label'):
+                if attribute == 'title' and tag == 'title':
+                    continue
                 name = ('label' if attribute == 'data-label' else attribute)
                 source = 'data-' + name + '-' + self.language
                 if source in attrs:

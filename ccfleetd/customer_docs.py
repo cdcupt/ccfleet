@@ -23,7 +23,7 @@ from .render import _quota_panel
 from .usersite import NAV, Viewer, _shell, public_usage_panel
 
 #: When these pages last changed in substance. Change it with the words.
-DOCS_UPDATED = "2026-11-21"
+DOCS_UPDATED = "2026-11-26"
 
 DOCS_CSS = """
 /* A docs page's title block. */
@@ -240,7 +240,8 @@ def _cost_zh(price: pricing.Price) -> str:
 
 def _wallet_rental_details() -> str:
     return bi(
-        '<p><strong>Your balance pays for Fleet slots only.</strong> On '
+        '<p><strong>Your balance pays for Fleet services (hosted slots and, where enabled, '
+        'OpenRouter usage).</strong> On '
         '<a href="/account">Your slots</a>, choose <strong>Add credit</strong>. '
         'Choose $10, $20, $50 or $100, then <strong>Continue to secure payment</strong>. '
         'Complete payment on Stripe, then '
@@ -261,7 +262,8 @@ def _wallet_rental_details() -> str:
         'keep their previous arrangement. For a failed setup or a billing mistake, contact '
         'the operator to review a credit correction; returning a slot does not itself '
         'issue a credit or cash refund.</p>',
-        '<p><strong>余额只用于支付 Fleet 槽位。</strong>在<a href="/account">我的槽位</a>'
+        '<p><strong>余额用于支付 Fleet 服务（托管槽位以及已启用时的 OpenRouter 用量）。</strong>'
+        '在<a href="/account">我的槽位</a>'
         '点击<strong>充值</strong>，选择 10、20、50 或 100 美元，'
         '再点击<strong>前往安全付款页面</strong>。到 Stripe 页面付款后，'
         '返回 Fleet 核对余额；付款确认后才会到账，仅返回页面不会增加余额。'
@@ -1174,11 +1176,13 @@ def _version_choices() -> str:
             "启动器和连接辅助程序。这不会更新电脑或槽位上的 Claude Code。</p>",
         )
         + bi(
-            "<p><strong>Claude Code on your computer:</strong> each <code>ccfleet claude</code> "
-            "launch checks Anthropic’s latest release and installs or updates the local "
-            "executable before starting the session.</p>",
-            "<p><strong>电脑上的 Claude Code：</strong>每次运行 <code>ccfleet claude</code> 时，"
-            "都会检查 Anthropic 的最新版本，在会话开始前安装或更新本地程序。</p>",
+            "<p><strong>Claude Code on your computer:</strong> starting in CLI 0.2.32, "
+            "launching <code>ccfleet claude</code> or <code>ccfleet openrouter</code> installs "
+            "a missing local executable automatically and asks before updating an existing "
+            "older version.</p>",
+            "<p><strong>电脑上的 Claude Code：</strong>自 CLI 0.2.32 起，启动 "
+            "<code>ccfleet claude</code> 或 <code>ccfleet openrouter</code> 时若缺少本地程序"
+            "会自动安装，检测到旧版本时则会先询问再更新。</p>",
         )
         + bi(
             '<p><strong>Claude Code on your slot:</strong> open <a href="/account">Your '
@@ -1243,6 +1247,25 @@ def _client_command_reference() -> str:
         ('<code>ccfleet list --remote</code>',
          'Fetch current own-slot names and ownership; plain list shows saved routing and pairings.',
          '从服务器读取当前自有槽位名称与归属；不加参数的 list 显示已保存的路由和配对。'),
+        ('<code>ccfleet openrouter</code> / <code>ccfleet openrouter-images</code>',
+         'Run offered OpenRouter models text-only by default; openrouter-images enables '
+         'images for one session (CLI 0.2.30+).',
+         '以默认纯文本模式运行可选 OpenRouter 模型；'
+         'openrouter-images 为单次会话启用图片输入（CLI 0.2.30+）。'),
+        ('<code>ccfleet doctor --connection</code>',
+         'Sample HTTPS and Claude route readiness and save a local support JSON '
+         'without model calls (CLI 0.2.34+).',
+         '采样 HTTPS 与 Claude 路由就绪状态并生成本地诊断 JSON，不调用模型（CLI 0.2.34+）。'),
+        ('<code>ccfleet mac add</code> / <code>ccfleet slots</code>',
+         'Open personal Mac connector setup or your dedicated slots and service picker '
+         '(CLI 0.2.36+; add --print-url to print the link).',
+         '打开个人 Mac 连接器设置或专属槽位与服务选择页'
+         '（CLI 0.2.36+；加 --print-url 仅打印链接）。'),
+        ('<code>ccfleet {herdr,orca,t3} setup</code>',
+         'Configure Herdr, Orca or T3 Code launchers automatically for CCFleet '
+         '(CLI 0.2.37+; add --slot SLOT for T3 Claude).',
+         '自动为 Herdr、Orca 或 T3 Code 配置 CCFleet 启动器'
+         '（CLI 0.2.37+；T3 配置 Claude 可加 --slot SLOT）。'),
     )
     return (
         '<h3 id="command-reference">'
@@ -1372,6 +1395,10 @@ def _openrouter_cli_guide() -> str:
             'native <code>bypassPermissions</code> mode (local edits and shell commands can '
             'run without approval prompts while native managed policy still applies); use '
             '<code>ccfleet openrouter --permission-mode auto</code> for auto mode. '
+            'Starting in <code>0.2.30</code>, <code>ccfleet openrouter</code> defaults to '
+            'text-only sessions; run <code>ccfleet openrouter-images</code> to enable inline '
+            'PNG, JPEG, GIF or WebP images for one session on image-capable models while '
+            'preserving text history. '
             '<a href="/docs/library/docs/public-gateway.html#openrouter">Full OpenRouter '
             'guide &amp; troubleshooting</a>.</p>',
             '<p>会话中用 <code>/model</code> 切换模型，上次使用的模型成为下次默认，'
@@ -1380,7 +1407,10 @@ def _openrouter_cli_guide() -> str:
             '1,048,576 token 上下文窗口。自 <code>0.2.27</code> 起，新建本地 OpenRouter '
             '会话默认使用原生 <code>bypassPermissions</code> 模式（本地编辑和 shell 命令可'
             '无需逐次批准执行，同时原生托管策略仍生效）；如需 auto 模式请运行 '
-            '<code>ccfleet openrouter --permission-mode auto</code>。详见'
+            '<code>ccfleet openrouter --permission-mode auto</code>。自 <code>0.2.30</code> 起，'
+            '<code>ccfleet openrouter</code> 默认运行纯文本会话；在支持图片的模型上运行 '
+            '<code>ccfleet openrouter-images</code> 可为单次会话启用内联 PNG、JPEG、GIF 或 '
+            'WebP 图片输入，同时保持文本历史完整。详见'
             '<a href="/docs/library/docs/public-gateway.html#openrouter">完整 OpenRouter '
             '说明与排查</a>。</p>',
         )
@@ -1429,12 +1459,22 @@ def _client_tools() -> str:
         "--privacy --json --export ./ccfleet-support.json</code></pre>"
         + bi(
             "<p>Doctor separates installation, pairing, connection and account-health "
-            "problems. The support report is a new local file, not an upload. It omits "
+            "problems. Starting in CLI <code>0.2.34</code>, <code>ccfleet doctor "
+            "--connection</code> samples HTTPS and Claude route readiness (five samples by "
+            "default; add <code>--samples 20 --interval 15</code> for intermittent issues and "
+            "<code>--symptom slow-start|stream-stalled|disconnect|other</code>) and saves a "
+            "local connection report JSON file with zero model requests. "
+            "The support report is a new local file, not an upload. It omits "
             "prompts, file contents, local paths, tokens and account email; review it "
             "before sharing. Reported readiness is an observation, not proof that "
             "Anthropic will accept the next request. Keep an existing working pairing "
             "while you investigate an error.</p>",
-            "<p>Doctor 区分安装、配对、连接和账号状态问题。诊断报告只写入新的本地文件，不会"
+            "<p>Doctor 区分安装、配对、连接和账号状态问题。自 CLI <code>0.2.34</code> 起，"
+            "<code>ccfleet doctor --connection</code> 会采样 HTTPS 与 Claude 路由就绪状态"
+            "（默认五次；间歇性问题可加 <code>--samples 20 --interval 15</code> 及 "
+            "<code>--symptom slow-start|stream-stalled|disconnect|other</code>），"
+            "在本地保存连接诊断 JSON 报告且不调用模型。"
+            "诊断报告只写入新的本地文件，不会"
             "上传，也不包含提示、文件内容、本地路径、token 或账号邮箱；请先检查再分享。显示"
             "“就绪”是一次状态观察，不保证 Anthropic 会接受下一条消息。排查问题时，请保留仍"
             "然有效的配对。</p>",
@@ -1645,14 +1685,21 @@ def _agent_app_guide() -> str:
             'in project terminals. Gemini uses the personal Antigravity subscription on your '
             'private Mac slot. Pair this Mac once with <code>ccfleet pair gemini</code> '
             'using your <a href="/account/gemini#subscription">saved setup code</a>. '
-            'By default, edits and test runs ask for approval in the Gemini terminal. '
-            '<a href="#gemini-project-access">Enable commands across projects</a>.</p>',
+            'Starting in CLI 0.2.29–0.2.35, interactive <code>ccfleet gemini</code> runs the '
+            'native terminal with full local tool access by default (showing the paired slot '
+            'and completed reply model); pass <code>--review</code> to require local tool '
+            'approvals for that session, or <code>--editor</code> for the workspace-session '
+            'flow. T3 Code uses <code>ccfleet gemini --acp</code>; '
+            '<a href="#gemini-project-access">enable commands across projects</a>.</p>',
             '<p>在保存项目文件的 MacBook 上打开项目。在 Orca 和 Herdr 桌面应用的项目终端中，'
             '可以运行 <code>ccfleet claude</code> 和 <code>ccfleet gemini</code>。Gemini 使用'
             '专属 Mac 槽位上的 Antigravity 个人订阅。用<a href="/account/gemini#subscription">'
             '已保存的配对码</a>运行 <code>ccfleet pair gemini</code>，每台 Mac 配对一次。'
-            '默认情况下，修改文件和运行测试前会请求确认。可<a href="#gemini-project-access">'
-            '启用跨项目命令</a>。</p>',
+            '自 CLI 0.2.29–0.2.35 起，交互式 <code>ccfleet gemini</code> 默认以原生终端运行'
+            '并开启本地工具完全访问（启动时显示已配对槽位，回复后显示模型）；加 '
+            '<code>--review</code> 可在本次会话启用本地工具逐次审批，加 <code>--editor</code> '
+            '可切回工作区会话模式。T3 Code 使用 <code>ccfleet gemini --acp</code>；可'
+            '<a href="#gemini-project-access">启用跨项目命令</a>。</p>',
         )
         + bi('<p>For a fixed-slot Claude launcher, finish <a href="#setup">Fleet setup</a>, '
              'select a Claude-backed slot and keep original Claude Code installed. The launcher '
@@ -1860,7 +1907,7 @@ def guide(
         + bi(
             '<p class="lead">Your computer does the work; your own provider account on a '
             "slot handles model access. Follow these steps to get both ready.</p>",
-            '<p class="lead">你的电脑负责工作，槽位上你自己的服务商 '
+            '<p class="lead">你的电脑负责工作，槽位上你自己的服务商'
             "账号负责模型访问。按下面几步，把两边准备好。</p>",
         )
         + _guide_navigation(personal_mac=personal_mac)
@@ -2364,10 +2411,17 @@ def how_it_works(
             "required and account maintenance. Stale observations do not claim readiness. "
             "A heartbeat does not prove provider acceptance. Read-only diagnostics check "
             "connections without a model request or project scan. Machines keep their "
-            "clocks on UTC; slot cards display reset times in your own time zone.</p>",
+            "clocks on UTC; slot cards display reset times in your own time zone.</p>"
+            "<p>Where personal Mac enrollment is enabled, you can also add your own Mac mini "
+            "or MacBook as a private slot through the signed outbound connector, without "
+            "router port forwarding or macOS Remote Login. Switch between personal Macs and "
+            "hosted slots in <a href=\"/account/dedicated\">Dedicated slots</a>.</p>",
             "<p>卡片区分已报告就绪、等待续期、需要登录和账号维护。过期状态不会被当作当前就"
             "绪。机器状态报告不保证服务商会接受下一条消息；只读诊断不调用模型，也不扫描项目"
-            "。机器时钟使用 UTC；槽位卡片上的额度重置时间按你所在的时区显示。</p>",
+            "。机器时钟使用 UTC；槽位卡片上的额度重置时间按你所在的时区显示。</p>"
+            "<p>开通个人 Mac 注册后，也可以通过已签名连接器将自己的 Mac mini 或 MacBook "
+            "主动外连为专属槽位，无需路由器端口转发或开启 macOS 远程登录。可在"
+            "<a href=\"/account/dedicated\">专属槽位</a>中切换个人 Mac 与托管槽位。</p>",
         )
         + "</div>"
         + _advanced_model_connections(cfg)
@@ -2380,7 +2434,7 @@ def how_it_works(
             "file contents and tool results it contains. Local files stay local as files; "
             "relevant contents can still be sent to the model.</p>",
             "<p><strong>网关可以读取模型请求和回复。</strong>HTTPS "
-            "保护每段连接，但网关为路由会解密消息。网关、选中的槽位和你选择的服务商 "
+            "保护每段连接，但网关为路由会解密消息。网关、选中的槽位和你选择的服务商"
             "都会处理模型上下文，包括其中的提示、文件内容和工具结果。文件本身仍在本地，但相"
             "关内容可能发给模型。</p>",
         )
@@ -2430,14 +2484,17 @@ def how_it_works(
         + bi("<h2>Updates, outages and returning a slot</h2>", "<h2>更新、故障与归还</h2>")
         + bi(
             "<p>Local Claude updates separately from the slot and the Fleet client. "
-            "CCFleet checks the latest local Claude release before launch. Machine security "
+            "Starting in CLI 0.2.32, CCFleet checks the latest local Claude release before "
+            "launch: it installs a missing local executable automatically and asks before "
+            "updating an existing older version. Machine security "
             "updates install daily; necessary reboots are scheduled by the operator. Check "
             '<a href="/status">Status</a> for website and machine availability, and '
             'the <a href="/status#performance">fleet performance panel</a> for combined '
             "relay measurements. It shows average upstream timing and transfer completion "
             "when enough users contribute data, without listing individual accounts.</p>",
-            "<p>电脑上的 Claude、槽位上的 Claude 和 Fleet 客户端分别更新。CC Fleet "
-            "每次启动代理前会检查并更新本地 Claude。机器每天安装安全更新"
+            "<p>电脑上的 Claude、槽位上的 Claude 和 Fleet 客户端分别更新。自 CLI 0.2.32 起，"
+            "CC Fleet 会在缺少本地 Claude 程序时自动安装，检测到旧版本时先询问再更新。"
+            "机器每天安装安全更新"
             '，需要重启时由运营者安排。网站和机器是否在线，可以查看<a href="/status">服务状'
             '态</a>；<a href="/status#performance">整体性能面板</a>汇总转发统计。'
             "达到参与用户和样本数量要求后，展示上游平均时长及传输完成率，不列出单个账号。</p>",
@@ -2585,7 +2642,7 @@ def terms(
             "responsible for following your provider&#x27;s terms and usage policy, as you "
             "would on your own computer. Do not share your slot, or your sign-in, with "
             "anybody else.</p>",
-            "<p>槽位只能使用你自己的服务商账号。你需要遵守所选服务商 "
+            "<p>槽位只能使用你自己的服务商账号。你需要遵守所选服务商"
             "的条款与使用政策，和在自己电脑上使用时一样。不要向他人共享槽位或登录。</p>",
         )
         + '</div><div class="card">'
