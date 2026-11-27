@@ -3388,6 +3388,21 @@ def _launcher_directory(name: str, *, create: bool = False) -> Path:
     return directory
 
 
+def _parse_settings_json(raw):
+    def unique(pairs):
+        result = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError("duplicate setting")
+            result[key] = item
+        return result
+
+    def nonfinite(_value):
+        raise ValueError("nonfinite setting")
+
+    return json.loads(raw, object_pairs_hook=unique, parse_constant=nonfinite)
+
+
 def _launcher_json(value: str, *, private: bool = False) -> dict[str, Any]:
     """Read app settings without following a leaf symlink or echoing their contents."""
     try:
@@ -3404,18 +3419,7 @@ def _launcher_json(value: str, *, private: bool = False) -> dict[str, Any]:
         if len(raw) > LAUNCHER_SETTINGS_LIMIT:
             raise ValueError("oversized settings")
 
-        def unique(pairs):
-            result = {}
-            for key, item in pairs:
-                if key in result:
-                    raise ValueError("duplicate setting")
-                result[key] = item
-            return result
-
-        def nonfinite(_value):
-            raise ValueError("nonfinite setting")
-
-        result = json.loads(raw, object_pairs_hook=unique, parse_constant=nonfinite)
+        result = _parse_settings_json(raw)
         if not isinstance(result, dict):
             raise ValueError("settings must be an object")
         return result
@@ -3492,13 +3496,23 @@ def cmd_launcher_create(args: argparse.Namespace) -> int:
     directory = _launcher_directory(args.name, create=True)
     if directory.exists():
         raise CliError("that launcher already exists; choose a different launcher name")
-    selected = args.claude or installed_agent("claude") or Path.home() / ".local/bin/claude"
+    binary = _app_claude_binary(args.claude)
+    route = local_route(load_config(), args.slot, "gateway", require_ready=False)
+    print(_create_app_launcher(directory, route, binary))
+    return 0
+
+
+def _app_claude_binary(native: str = "") -> Path:
+    selected = native or installed_agent("claude") or Path.home() / ".local/bin/claude"
     try:
         binary = Path(selected).expanduser().absolute()
         _launcher_candidate(str(binary))
+        return binary
     except (OSError, RuntimeError):
         raise CliError("choose an installed original Claude executable with --claude") from None
-    route = local_route(load_config(), args.slot, "gateway", require_ready=False)
+
+
+def _create_app_launcher(directory: Path, route: dict[str, Any], binary: Path) -> Path:
     gateway = route["gateway"]
     if gateway is None or not route["slot_id"]:
         raise CliError("a launcher needs one explicitly selected existing HTTPS gateway slot")
@@ -3508,7 +3522,7 @@ def cmd_launcher_create(args: argparse.Namespace) -> int:
     wrapper = ("#!/bin/sh\n" + LAUNCHER_MARKER + "\n"
                + "export CCFLEET_HOME=" + shlex.quote(str(home().absolute())) + "\n"
                + "exec " + " ".join(shlex.quote(part) for part in (
-                   *client_command, "__external-claude", "--launcher", args.name, "--"))
+                   *client_command, "__external-claude", "--launcher", directory.name, "--"))
                + ' "$@"\n')
     directory.mkdir(mode=0o700)
     try:
@@ -3523,8 +3537,7 @@ def cmd_launcher_create(args: argparse.Namespace) -> int:
             (directory / name).unlink(missing_ok=True)
         directory.rmdir()
         raise
-    print(directory / "claude")
-    return 0
+    return directory / "claude"
 
 
 def _launcher_merge(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
@@ -4082,6 +4095,222 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
     return 0
 
 
+def _read_harness_text(path: Path) -> Optional[str]:
+    try:
+        with path.open("r", encoding="utf-8", newline="") as stream:
+            return stream.read()
+    except FileNotFoundError:
+        return None
+
+
+def _save_harness_text(path: Path, original: Optional[str], updated: str) -> None:
+    if original == updated:
+        return
+    # Follow dotfile-manager symlinks and replace the target atomically.
+    path = path.resolve()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
+        staged = Path(stream.name)
+        try:
+            if original is not None:
+                os.fchmod(stream.fileno(), stat.S_IMODE(path.stat().st_mode))
+            stream.write(updated.encode("utf-8"))
+            stream.flush()
+            os.fsync(stream.fileno())
+            if _read_harness_text(path) != original:
+                raise CliError(f"{path} changed during setup; rerun the command")
+            os.replace(staged, path)
+        finally:
+            staged.unlink(missing_ok=True)
+
+
+@contextlib.contextmanager
+def _harness_json(path: Path):
+    original = _read_harness_text(path)
+    try:
+        root = _parse_settings_json(original) if original is not None else {}
+    except (ValueError, RecursionError):
+        raise CliError(f"{path} contains invalid JSON; fix it and rerun setup") from None
+    if not isinstance(root, dict):
+        raise CliError(f"{path} must contain a JSON object")
+    before = json.dumps(root, ensure_ascii=False, indent=2)
+    yield root
+    after = json.dumps(root, ensure_ascii=False, indent=2)
+    if before != after:
+        _save_harness_text(path, original, after + "\n")
+
+
+def _settings_object(settings: dict, key: str) -> dict:
+    value = settings.setdefault(key, {})
+    if not isinstance(value, dict):
+        raise CliError(f"the existing {key} setting must be a JSON object")
+    return value
+
+
+HERDR_ZSH_RESUME = '''# >>> CCFleet Herdr resume >>>
+if [[ -n ${HERDR_PANE_ID:-} && ${aliases[claude]-} != _ccfleet_herdr_claude ]]; then
+  function _ccfleet_herdr_claude {
+    if [[ ${1:-} == --resume ]]; then
+      command ccfleet claude "$@"
+    else
+      claude "$@"
+    fi
+  }
+  alias claude=_ccfleet_herdr_claude
+fi
+# <<< CCFleet Herdr resume <<<'''
+
+
+def setup_herdr(target: Optional[str]) -> int:
+    if target == "tui" or (target is None and os.environ.get("HERDR_PANE_ID")):
+        executable = os.environ.get("HERDR_BIN_PATH") or shutil.which("herdr")
+        if not executable:
+            raise CliError("install Herdr TUI or run setup from a Herdr pane")
+        rc = Path(os.environ.get("ZDOTDIR") or Path.home()) / ".zshrc"
+        original = _read_harness_text(rc)
+        content = original or ""
+        if HERDR_ZSH_RESUME not in content and "# >>> CCFleet Herdr resume >>>" in content:
+            raise CliError(f"review the edited CCFleet Herdr block in {rc} before running setup")
+        # Herdr installs its hook only into an existing Claude configuration directory.
+        claude_home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+        claude_home.mkdir(parents=True, exist_ok=True, mode=0o700)
+        status = subprocess.run([executable, "integration", "install", "claude"]).returncode
+        if status:
+            raise CliError("Herdr could not install its Claude integration; rerun setup after fixing the error above")
+        if HERDR_ZSH_RESUME not in content:
+            separator = "\n" if content and not content.endswith("\n") else ""
+            _save_harness_text(rc, original, content + separator + HERDR_ZSH_RESUME + "\n")
+        print(f"Herdr TUI configured. Open a new zsh pane to resume Claude through CCFleet ({rc}).")
+    else:
+        config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+        path = Path(os.environ.get("HERDR_APP_HOME") or config / "herdr-app") / "programs.json"
+        with _harness_json(path) as root:
+            claude = _settings_object(_settings_object(root, "programs"), "claude")
+            claude["run"] = ["ccfleet", "claude", "--resume"]
+        print(f"Herdr Desktop configured. Choose Claude from the project's + menu ({path}).")
+    return 0
+
+
+def setup_t3(slot: Optional[str]) -> int:
+    path = Path(os.environ.get("T3CODE_HOME") or Path.home() / ".t3") / "userdata" / "settings.json"
+    with _harness_json(path) as settings:
+        providers = _settings_object(settings, "providerInstances")
+        binary = install_directory() / "ccfleet"
+        _add_t3_provider(providers, "ccfleet-gemini", "CCFleet Gemini", "acpRegistry", {
+            "source": "local", "commandPath": str(binary), "commandArgs": ["gemini", "--acp"],
+        })
+        if slot:
+            route = local_route(load_config(), slot, "gateway", require_ready=False)
+            if not route["gateway"] or not route["slot_id"]:
+                raise CliError("T3 Claude needs an existing HTTPS gateway slot")
+            identity = (route["gateway"]["base_url"] + "\n" + route["slot_id"]).encode()
+            name = "t3-" + hashlib.sha256(identity).hexdigest()[:16]
+            directory = _launcher_directory(name, create=True)
+            wrapper = directory / "claude"
+            _add_t3_provider(providers, "ccfleet-claude-" + name[3:],
+                             f"CCFleet Claude ({slot})", "claudeAgent", {"binaryPath": str(wrapper)})
+            if directory.exists():
+                profile = _load_launcher(name)
+                if (profile["slot_id"] != route["slot_id"] or profile["server"] != route["gateway"]["base_url"]
+                        or profile["provider"] != route["provider"] or not os.access(wrapper, os.X_OK)):
+                    raise CliError("the existing T3 Claude launcher does not match this gateway slot")
+            else:
+                _create_app_launcher(directory, route, _app_claude_binary())
+    print(f"T3 providers configured in {path}. Choose CCFleet Gemini"
+          + (f" or CCFleet Claude ({slot})" if slot else "") + " in T3 Code.")
+    return 0
+
+
+def _add_t3_provider(providers: dict, key: str, label: str, driver: str, config: dict) -> None:
+    if key not in providers:
+        providers[key] = {"driver": driver, "displayName": label, "enabled": True, "config": config}
+        return
+    current = providers[key]
+    if (not isinstance(current, dict) or current.get("driver") != driver
+            or not isinstance(current.get("config"), dict)
+            or any(current["config"].get(k) != v for k, v in config.items())):
+        raise CliError(f"T3 provider {key} already has a different configuration; review it in Settings")
+
+
+def _orca_rpc(endpoint: Path, token: str, method: str, params=None) -> list:
+    request_id = secrets.token_hex(16)
+    request = {"id": request_id, "method": "settings." + method, "authToken": token}
+    if params is not None:
+        request["params"] = params
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        deadline = time.monotonic() + 5
+        client.settimeout(5)
+        client.connect(str(endpoint))
+        client.sendall(json.dumps(request).encode() + b"\n")
+        with client.makefile("rb") as stream:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise CliError("Orca timed out; check the local app and rerun setup")
+                client.settimeout(remaining)
+                raw = stream.readline(1024 * 1024 + 1)
+                if not raw.endswith(b"\n") or len(raw) > 1024 * 1024:
+                    raise CliError("incomplete response from Orca; reopen Orca and rerun setup")
+                frame = json.loads(raw)
+                if not isinstance(frame, dict):
+                    raise CliError("invalid response from Orca")
+                if "_keepalive" not in frame:
+                    break
+    result = frame.get("result")
+    if (frame.get("id") != request_id or frame.get("ok") is not True
+            or not isinstance(result, dict) or not isinstance(result.get("terminalQuickCommands"), list)):
+        raise CliError("Orca declined the Quick Commands request; check the local Orca version and settings")
+    return result["terminalQuickCommands"]
+
+
+def setup_orca() -> int:
+    config = (Path.home() / "Library/Application Support" if sys.platform == "darwin"
+              else Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"))
+    metadata = Path(os.environ.get("ORCA_USER_DATA_PATH") or config / "orca") / "orca-runtime.json"
+    if not metadata.is_file():
+        raise CliError("open local Orca and rerun ccfleet orca setup")
+    try:
+        runtime = _launcher_json(str(metadata), private=True)
+    except CliError:
+        raise CliError("Orca runtime metadata must be valid, private and owned by this user") from None
+    transports = runtime.get("transports", [runtime.get("transport")])
+    if not isinstance(transports, list):
+        raise CliError("invalid local Orca transport metadata")
+    address = next((item.get("endpoint") for item in transports
+                    if isinstance(item, dict) and item.get("kind") == "unix"), None)
+    token = runtime.get("authToken")
+    if not isinstance(address, str) or not os.path.isabs(address) or not isinstance(token, str) or not token:
+        raise CliError("Orca has no authenticated local Unix socket; open the local Orca profile")
+    endpoint = Path(address)
+    try:
+        parent = endpoint.parent.stat()
+        info = endpoint.lstat()
+    except FileNotFoundError:
+        raise CliError("the local Orca socket is offline; open Orca and rerun setup") from None
+    if (parent.st_uid != os.getuid() or parent.st_mode & 0o022
+            or not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid()):
+        raise CliError("Orca socket must belong to this user in a directory only this user can write")
+    listed = _orca_rpc(endpoint, token, "getTerminalQuickCommands")
+    for key, label, command in (("ccfleet-claude-resume", "CCFleet Claude Resume", "ccfleet claude --resume"),
+                                ("ccfleet-gemini", "CCFleet Gemini", "ccfleet gemini")):
+        desired = {"id": key, "label": label, "command": command, "appendEnter": True,
+                   "scope": {"type": "global"}}
+        exists = False
+        for row in listed:
+            if not isinstance(row, dict):
+                continue
+            if (row.get("scope", {"type": "global"}) == {"type": "global"}
+                    and row.get("command") == command and row.get("appendEnter") is True):
+                exists = True
+            elif row.get("id") == key:
+                raise CliError(f"Orca Quick Command {key} already has different settings")
+        if not exists:
+            listed = _orca_rpc(endpoint, token, "updateTerminalQuickCommands",
+                               {"mutation": {"type": "upsert", "command": desired}})
+    print("Orca configured. Open Quick Commands in a local worktree to resume Claude or start Gemini.")
+    return 0
+
+
 def cmd_account_page(args: argparse.Namespace) -> int:
     """Open an official Fleet account page without transmitting a local pairing token."""
     path = "/account/machines/add" if args.command == "mac" else "/account/dedicated"
@@ -4148,6 +4377,25 @@ def parser() -> argparse.ArgumentParser:
                                    "priority: try account order for each request")
             item.add_argument("--name", default="This computer", help="endpoint key label")
     gateway.set_defaults(slot="")
+    for name, help_text, description in (
+        ("herdr", "configure Claude resume in Herdr",
+         "Configure the Desktop Claude menu, or session restore when run in a Herdr TUI pane."),
+        ("orca", "configure CCFleet Quick Commands in Orca",
+         "Open local Orca, then run setup to add global Claude Resume and Gemini Quick Commands."),
+        ("t3", "configure local CCFleet providers in T3 Code",
+         "Run on the T3 server to register Gemini ACP. Add --slot SLOT for Claude thread resume."),
+    ):
+        harness = sub.add_parser(name, help=help_text)
+        setup_harness = harness.add_subparsers(required=True).add_parser(
+            "setup", help=help_text, description=description)
+        if name == "herdr":
+            target = setup_harness.add_mutually_exclusive_group()
+            target.add_argument("--desktop", dest="target", action="store_const", const="desktop",
+                                help="configure the Claude entry in the desktop menu")
+            target.add_argument("--tui", dest="target", action="store_const", const="tui",
+                                help="configure Claude session restore in Herdr zsh panes")
+        if name == "t3":
+            setup_harness.add_argument("--slot", help="also register Claude on this HTTPS gateway slot")
     launcher = sub.add_parser("launcher", help="create a fixed-slot Claude executable for an app")
     launcher_sub = launcher.add_subparsers(dest="launcher_action", required=True)
     create = launcher_sub.add_parser("create", help="create a private, secret-free app launcher")
@@ -4434,6 +4682,13 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_openrouter(args)
         if args.command == "gateway":
             return cmd_gateway(args)
+        if args.command in ("herdr", "orca", "t3"):
+            with project_lock("harness setup"):
+                if args.command == "herdr":
+                    return setup_herdr(args.target)
+                if args.command == "orca":
+                    return setup_orca()
+                return setup_t3(args.slot)
         if args.command == "launcher":
             return cmd_launcher_create(args)
         if args.command == "__external-claude":

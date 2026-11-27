@@ -59,6 +59,7 @@ color:var(--acc,#4932c5)}
 <pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"</code></pre></details>
 <div class="bi"><div class="copy-en" lang="en">
+<p><strong>Automated setup (upcoming; stable 0.2.36 predates this command).</strong> Run <code>ccfleet t3 setup</code> on the T3 server machine to configure <strong>CCFleet Gemini</strong> (still requires standard Gemini pairing). Run <code>ccfleet t3 setup --slot SLOT</code> to also install <strong>CCFleet Claude</strong> with a fixed HTTPS gateway slot and T3-managed resume.</p>
 <p>Open your project in T3 Code on your Mac. CCFleet connects T3 to Antigravity on your private Mac slot. Google sign-in stays on the slot, and Gemini uses that account’s subscription quota.</p>
 <ol>
 <li>In <a href="https://ccfleet.io/en/account/gemini#subscription">Gemini settings</a>, use your saved reusable code. If you haven’t created one, choose <strong>Create reusable setup code</strong> and save it now. The code is shown only once and can pair each Mac you trust.</li>
@@ -77,6 +78,7 @@ ccfleet pair gemini</code></pre></li>
 <p>The slot can retain up to four eligible profiles, each up to 128 MiB. If the previous conversation is unavailable, enter <code>/reconnect</code> when prompted to start a fresh one in the same T3 thread. See the <a href="https://ccfleet.io/en/docs/guide#gemini-recovery">recovery and upgrade instructions</a> if you still use 0.2.21.</p>
 <p>Each paired Mac has its own device credential. Removing a Mac revokes that device’s access. If it still has the reusable code, replace or disable the code to prevent it from pairing again. Other paired Macs keep working. For a terminal chat, run <code>ccfleet gemini</code> in the project directory.</p>
 </div><div class="copy-zh" lang="zh-Hans">
+<p><strong>自动配置（即将推出，稳定版 0.2.36 尚未包含）。</strong>在 T3 服务器所在机器上运行 <code>ccfleet t3 setup</code> 即可配置 <strong>CCFleet Gemini</strong>（仍需完成常规 Gemini 配对）。运行 <code>ccfleet t3 setup --slot SLOT</code> 还会同时安装 <strong>CCFleet Claude</strong>，绑定固定 HTTPS 网关槽位并启用由 T3 管理的会话恢复。</p>
 <p>在本机 Mac 的 T3 Code 中打开项目。CCFleet 将 T3 连接到专属 Mac 槽位上的 Antigravity。Google 登录凭据保存在槽位上，Gemini 使用该账号的订阅额度。</p>
 <ol>
 <li>打开 <a href="https://ccfleet.io/zh/account/gemini#subscription">Gemini 设置</a>，使用已保存的配对码。如尚未创建，请点击<strong>创建可重复使用的配对码</strong>，并立即保存。配对码只显示一次，可在你信任的每台 Mac 上使用。</li>

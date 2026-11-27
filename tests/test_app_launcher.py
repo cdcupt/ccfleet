@@ -42,7 +42,8 @@ def managed():
         raise scope['CliError']('managed routing conflict')
 scope['check_managed_route'] = managed
 scope['native_proxy_exclusions'] = lambda *args: None
-raise SystemExit(cli['main'](['__external-claude', '--launcher', 'app', '--', *sys.argv[2:]]))
+launcher = os.environ.get('TEST_LAUNCHER', 'app')
+raise SystemExit(cli['main'](['__external-claude', '--launcher', launcher, '--', *sys.argv[2:]]))
 """
 
 
@@ -150,6 +151,22 @@ def test_app_information_probes_are_offline_and_do_not_need_pairing_or_gateway(a
     assert result.returncode == 0 and expected in result.stdout and result.stderr == ""
     assert not app.route_call.exists() and not app.record.exists()
     assert not list(app.config.glob(".launcher-settings-*"))
+
+
+def test_t3_configured_launcher_forwards_native_resume_id(app, monkeypatch):
+    monkeypatch.setenv("T3CODE_HOME", str(app.root / "t3"))
+    monkeypatch.setitem(app.scope, "installed_agent", lambda name: str(app.native))
+    assert app.cli["main"](["t3", "setup", "--slot", "stable-slot"]) == 0
+    settings = json.loads((app.root / "t3/userdata/settings.json").read_text())
+    provider, = (v for v in settings["providerInstances"].values() if v["driver"] == "claudeAgent")
+    launcher = Path(provider["config"]["binaryPath"]).parent.name
+    session_id = "23c5ab74-b1cb-4c57-a3ed-9affbc8f5ba9"
+    result = app.invoke(["--resume", session_id, "--output-format", "stream-json"],
+                        changes={"TEST_LAUNCHER": launcher})
+    assert result.returncode == 0, result.stderr
+    argv = json.loads(app.record.read_text())["argv"]
+    assert argv[argv.index("--resume") + 1] == session_id
+    assert json.loads(app.route_call.read_text())["slot"] == "stable-slot"
 
 
 def test_t3_title_invocation_preserves_schema_empty_tools_dontask_and_stdin(app):
